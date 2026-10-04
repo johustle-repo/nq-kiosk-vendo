@@ -1,0 +1,127 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Cloud (HTTPS) and local coin-controller (LAN) communication. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Foreground service that keeps talking to the coin controller while a
+         customer app is in front. Type connectedDevice: "interactions with
+         external devices that require a ... network connection".
+         CHANGE_NETWORK_STATE is the documented runtime prerequisite. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Held only while paid time is running so expiry is enforced promptly. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <application
+        android:label="Vendo Kiosk"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="false"
+        android:networkSecurityConfig="@xml/network_security_config">
+
+        <!-- lockTaskMode="if_whitelisted": once this app is allowlisted by the
+             Device Owner policy, the activity enters lock task mode by itself
+             (also after reboot when launched as the home screen). -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:lockTaskMode="if_whitelisted"
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <meta-data
+              android:name="io.flutter.embedding.android.NormalTheme"
+              android:resource="@style/NormalTheme"
+              />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+
+        <!-- HOME entry point. Disabled by default so a personal phone in demo
+             mode never offers this app as its home screen. Production mode
+             enables it and makes it the persistent preferred home activity. -->
+        <activity-alias
+            android:name=".KioskHome"
+            android:targetActivity=".MainActivity"
+            android:enabled="false"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- Device Policy Controller. Becomes Device Owner only through explicit
+             provisioning (see docs/DEVICE_OWNER_PROVISIONING.md). -->
+        <receiver
+            android:name=".kiosk.KioskDeviceAdminReceiver"
+            android:exported="true"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+                <action android:name="android.app.action.PROFILE_PROVISIONING_COMPLETE" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".kiosk.BootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".kiosk.WatchdogReceiver"
+            android:exported="false" />
+
+        <!-- Last-resort recovery via adb only: DUMP is held by the adb shell and
+             cannot be granted to ordinary apps. See docs/RECOVERY.md. -->
+        <receiver
+            android:name=".kiosk.AdbRecoveryReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="online.ebnleadgen.vendokiosk.ADB_RECOVERY" />
+            </intent-filter>
+        </receiver>
+
+        <service
+            android:name=".service.KioskService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
+        <!-- Don't delete the meta-data below.
+             This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+    </application>
+
+    <!-- Package visibility, scoped to what the kiosk needs: apps that have a
+         launcher entry (to list and start them). No QUERY_ALL_PACKAGES. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
+    </queries>
+</manifest>

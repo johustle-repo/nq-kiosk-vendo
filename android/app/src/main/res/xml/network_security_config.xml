@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cleartext HTTP is disabled for the whole app. The cloud API uses HTTPS with
+     the system trust store. The coin controller on the local Wi-Fi is reached
+     by LocalControllerClient over a raw socket restricted in code to private
+     IPv4 addresses (its address is configured at run time, which this file
+     cannot express); its responses are authenticated with HMAC-SHA256.
+     See docs/SECURITY.md. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

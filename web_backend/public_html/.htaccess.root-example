@@ -1,0 +1,38 @@
+# public_html/.htaccess for the Flutter web kiosk (document root).
+# MERGE with any existing public_html/.htaccess — inspect it first and keep its
+# PHP settings (e.g. AddHandler / php_value lines added by hPanel).
+
+DirectoryIndex index.html index.php
+Options -Indexes
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+
+  # HTTPS only.
+  RewriteCond %{HTTPS} !=on
+  RewriteCond %{HTTP:X-Forwarded-Proto} !=https
+  RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+  # Make the Authorization header visible to PHP (bearer tokens).
+  RewriteCond %{HTTP:Authorization} .
+  RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+  # API requests are NEVER rewritten to the Flutter app. Stop here and let the
+  # existing api/ folder (and its own .htaccess) handle them, 404s included.
+  RewriteRule ^api(/|$) - [L]
+
+  # Real files and folders (main.dart.js, assets/, canvaskit/, ...) as-is.
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  # Everything else is a client-side route of the single-page app.
+  RewriteRule ^ index.html [L]
+</IfModule>
+
+# Always fetch the newest app shell; hashed/static assets may be cached.
+<IfModule mod_headers.c>
+  <FilesMatch "^(index\.html|flutter_bootstrap\.js|flutter_service_worker\.js|version\.json|manifest\.json)$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+</IfModule>

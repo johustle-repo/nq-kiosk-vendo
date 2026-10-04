@@ -1,0 +1,10 @@
+# ADD these lines to the EXISTING public_html/api/.htaccess (do not replace it).
+# If that file contains "RewriteEngine On", the root .htaccess rewrite rules are
+# not inherited inside api/, so the Authorization pass-through must be repeated
+# here. (The endpoint also accepts the X-Kiosk-Token header as a fallback.)
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteCond %{HTTP:Authorization} .
+  RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+</IfModule>
