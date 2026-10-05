@@ -12,10 +12,11 @@ import org.junit.Test
 class ControllerProtocolTest {
     private val key = ByteArray(32) { it.toByte() }
     private val nonce = "00112233445566778899aabbccddeeff"
-    private fun body(n: String = nonce, device: String = "vk-abc", remaining: Int = 480) =
-        """{"ok":true,"protocol":1,"device_id":"$device","boot_id":"1a2b3c4d","uptime_ms":60000,"seq":2,"session_no":1,"session":"running","remaining_s":$remaining,"seconds_per_pulse":240,"rate_version":0,"last_added_s":240,"last_pulses":1,"resumed":false,"cloud":"ok","nonce":"$n"}"""
+    private fun body(n: String = nonce, device: String = "vk-abc", remaining: Int = 480, station: Int = 2) =
+        """{"ok":true,"protocol":2,"device_id":"$device","boot_id":"1a2b3c4d","station":$station,"uptime_ms":60000,"seq":2,"session_no":1,"session":"running","remaining_s":$remaining,"seconds_per_pulse":240,"rate_version":0,"last_added_s":240,"last_pulses":1,"selected_station":2,"selected_ttl_s":75,"held_pulses":5,"resumed":false,"cloud":"ok","nonce":"$n"}"""
 
-    private fun sign(b: String, n: String = nonce, k: ByteArray = key) = ControllerProtocol.hmacHex(k, ControllerProtocol.statusSignatureInput(n, b))
+    private fun sign(b: String, n: String = nonce, k: ByteArray = key, station: Int = 2) =
+        ControllerProtocol.hmacHex(k, ControllerProtocol.statusSignatureInput(station, n, b))
 
     private fun expectCode(code: String, block: () -> Unit) {
         try {
@@ -35,29 +36,47 @@ class ControllerProtocolTest {
     @Test
     fun `valid signed status is accepted`() {
         val b = body()
-        val s = ControllerProtocol.verifyStatus(b, sign(b), nonce, key, "vk-abc")
+        val s = ControllerProtocol.verifyStatus(b, sign(b), nonce, key, "vk-abc", 2)
         assertEquals(480, s.remainingS)
         assertEquals("1a2b3c4d", s.bootId)
         assertEquals(2, s.seq)
         assertTrue(s.running)
+        assertEquals(2, s.station)
+        assertEquals(2, s.selectedStation)
+        assertEquals(5, s.heldPulses)
+    }
+
+    @Test
+    fun `a response for another tablet is rejected`() {
+        // Correctly signed for tablet 3 with tablet 3's own key, presented to tablet 2.
+        val b = body(station = 3)
+        expectCode("bad_signature") { ControllerProtocol.verifyStatus(b, sign(b, station = 3), nonce, key, null, 2) }
+        // Even signed over tablet 2's input, the body must name tablet 2.
+        expectCode("wrong_station") { ControllerProtocol.verifyStatus(b, sign(b, station = 2), nonce, key, null, 2) }
+    }
+
+    @Test
+    fun `protocol 1 firmware is rejected with a clear code`() {
+        val b = body().replace("\"protocol\":2", "\"protocol\":1")
+        expectCode("protocol") { ControllerProtocol.verifyStatus(b, sign(b), nonce, key, null, 2) }
     }
 
     @Test
     fun `tampered remaining time is rejected`() {
         val b = body()
         val sig = sign(b)
-        expectCode("bad_signature") { ControllerProtocol.verifyStatus(body(remaining = 99_999), sig, nonce, key, "vk-abc") }
+        expectCode("bad_signature") { ControllerProtocol.verifyStatus(body(remaining = 99_999), sig, nonce, key, "vk-abc", 2) }
     }
 
     @Test
     fun `wrong key (spoofed controller) is rejected`() {
         val b = body()
-        expectCode("bad_signature") { ControllerProtocol.verifyStatus(b, sign(b, k = ByteArray(32)), nonce, key, null) }
+        expectCode("bad_signature") { ControllerProtocol.verifyStatus(b, sign(b, k = ByteArray(32)), nonce, key, null, 2) }
     }
 
     @Test
     fun `missing signature is rejected`() {
-        expectCode("unsigned") { ControllerProtocol.verifyStatus(body(), null, nonce, key, null) }
+        expectCode("unsigned") { ControllerProtocol.verifyStatus(body(), null, nonce, key, null, 2) }
     }
 
     @Test
@@ -65,33 +84,34 @@ class ControllerProtocolTest {
         val old = "ffeeddccbbaa99887766554433221100"
         val b = body(n = old)
         // Signed correctly for the old nonce, but presented for the new request.
-        expectCode("bad_signature") { ControllerProtocol.verifyStatus(b, sign(b, n = old), nonce, key, null) }
+        expectCode("bad_signature") { ControllerProtocol.verifyStatus(b, sign(b, n = old), nonce, key, null, 2) }
         // Even if the attacker could sign with the new nonce, the body must echo it.
-        expectCode("nonce_mismatch") { ControllerProtocol.verifyStatus(b, sign(b, n = nonce), nonce, key, null) }
+        expectCode("nonce_mismatch") { ControllerProtocol.verifyStatus(b, sign(b, n = nonce), nonce, key, null, 2) }
     }
 
     @Test
     fun `different controller id is rejected`() {
         val b = body(device = "vk-other")
-        expectCode("wrong_device") { ControllerProtocol.verifyStatus(b, sign(b), nonce, key, "vk-abc") }
+        expectCode("wrong_device") { ControllerProtocol.verifyStatus(b, sign(b), nonce, key, "vk-abc", 2) }
     }
 
     @Test
     fun `command MAC binds name, boot and counter`() {
-        val a = ControllerProtocol.commandMac(key, "end_session", "1a2b3c4d", 5)
-        assertFalse(a == ControllerProtocol.commandMac(key, "end_session", "1a2b3c4d", 6))
-        assertFalse(a == ControllerProtocol.commandMac(key, "unpair", "1a2b3c4d", 5))
-        assertFalse(a == ControllerProtocol.commandMac(key, "end_session", "ffffffff", 5))
+        val a = ControllerProtocol.commandMac(key, "end_session", 2, "1a2b3c4d", 5)
+        assertFalse(a == ControllerProtocol.commandMac(key, "end_session", 2, "1a2b3c4d", 6))
+        assertFalse(a == ControllerProtocol.commandMac(key, "unpair", 2, "1a2b3c4d", 5))
+        assertFalse(a == ControllerProtocol.commandMac(key, "end_session", 2, "ffffffff", 5))
+        assertFalse(a == ControllerProtocol.commandMac(key, "end_session", 3, "1a2b3c4d", 5))
     }
 
     @Test
     fun `pair response parsing`() {
         val k = ByteArray(32) { 7 }.toHex()
-        val p = ControllerProtocol.parsePairResponse("""{"ok":true,"device_id":"vk-abc","boot_id":"1a2b3c4d","key":"$k"}""")
+        val p = ControllerProtocol.parsePairResponse("""{"ok":true,"device_id":"vk-abc","boot_id":"1a2b3c4d","station":2,"key":"$k"}""", 2)
         assertEquals("vk-abc", p.deviceId)
         assertEquals(32, p.key.size)
-        expectCode("wrong_code") { ControllerProtocol.parsePairResponse("""{"ok":false,"error":"wrong_code"}""") }
-        expectCode("bad_key") { ControllerProtocol.parsePairResponse("""{"ok":true,"key":"abc"}""") }
+        expectCode("wrong_code") { ControllerProtocol.parsePairResponse("""{"ok":false,"error":"wrong_code"}""", 2) }
+        expectCode("bad_key") { ControllerProtocol.parsePairResponse("""{"ok":true,"station":2,"key":"abc"}""", 2) }
     }
 }
 

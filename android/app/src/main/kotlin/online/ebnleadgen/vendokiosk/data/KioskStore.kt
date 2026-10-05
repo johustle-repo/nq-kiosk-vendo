@@ -71,6 +71,11 @@ class KioskStore(context: Context) {
         get() = prefs.getString("controller_device_id", null)
         set(v) = prefs.edit().putString("controller_device_id", v).apply()
 
+    /** This tablet's number on the shared coin box (1-4). Earlier single-tablet pairings are tablet 1. */
+    var controllerStation: Int
+        get() = prefs.getInt("controller_station", 1).takeIf { it in 1..4 } ?: 1
+        set(v) = prefs.edit().putInt("controller_station", v).apply()
+
     var allowedPackages: List<String>
         get() = prefs.getString("allowed_packages", "")!!.split(",").filter { it.isNotBlank() }
         set(v) = prefs.edit().putString("allowed_packages", v.distinct().joinToString(",")).apply()

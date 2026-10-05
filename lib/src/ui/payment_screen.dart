@@ -52,6 +52,10 @@ class PaymentScreen extends StatelessWidget {
         ),
     ];
 
+    // Production with a paired coin box: show which tablet this is and whether
+    // the attendant has pointed the coin box at it.
+    final shared = !s.isDemo && s.controllerPaired;
+
     Widget hero(Responsive r) => Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -81,16 +85,27 @@ class PaymentScreen extends StatelessWidget {
             ),
           ),
         ] else ...[
+          // Shared coin box: the attendant chooses which tablet gets the next coins.
+          if (shared) ...[
+            Center(child: TabletBadge(station: s.controllerStation, ready: s.coinBoxReadyForMe)),
+            SizedBox(height: r.isCompact ? 12 : 18),
+          ],
           Center(
             child: InsertCoinButton(large: !r.isCompact && !r.isLandscapePhone),
           ),
           if (!r.isLandscapePhone) ...[
             SizedBox(height: r.isCompact ? 10 : 16),
             Text(
-              'Drop a coin in the slot. Your time starts right away.',
+              !shared
+                  ? 'Drop a coin in the slot. Your time starts right away.'
+                  : s.coinBoxReadyForMe
+                  ? 'The coin box is ready for Tablet ${s.controllerStation}. Insert your coins now.'
+                  : 'Ask the staff to select Tablet ${s.controllerStation}, then insert your coins.',
+              key: const Key('payment-hint'),
               textAlign: TextAlign.center,
               style: (r.isCompact ? t.bodyLarge : t.titleMedium)?.copyWith(
-                color: KioskPalette.textMuted,
+                color: shared && s.coinBoxReadyForMe ? KioskPalette.accent : KioskPalette.textMuted,
+                fontWeight: shared && s.coinBoxReadyForMe ? FontWeight.w700 : null,
               ),
             ),
           ],

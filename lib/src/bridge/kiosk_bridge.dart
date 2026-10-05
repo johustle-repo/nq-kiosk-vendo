@@ -70,7 +70,7 @@ abstract class KioskBridge {
   Future<void> setAllowedPackages(List<String> packages);
   Future<void> setLossTimeout(int seconds);
   Future<void> setLockAdb(bool lock);
-  Future<String> pairController(String address, String code);
+  Future<String> pairController(String address, String code, int station);
   Future<void> setControllerAddress(String address);
   Future<void> unpairController();
   Future<void> endSession();
@@ -202,10 +202,11 @@ class MethodChannelKioskBridge implements KioskBridge {
   Future<void> setLockAdb(bool lock) => _call('setLockAdb', {'lock': lock});
 
   @override
-  Future<String> pairController(String address, String code) async =>
+  Future<String> pairController(String address, String code, int station) async =>
       (await _call<String>('pairController', {
         'address': address,
         'code': code,
+        'station': station,
       }))!;
 
   @override

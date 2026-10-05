@@ -11,7 +11,7 @@ class SessionTrackerTest {
         uptime: Long = 10_000,
         boot: String = "aaaaaaaa",
         device: String = "vk-1",
-    ) = ControllerStatus(device, boot, uptime, seq, 1, remaining > 0, remaining, 240, 0, 240, 1, false, "ok")
+    ) = ControllerStatus(device, boot, 1, uptime, seq, 1, remaining > 0, remaining, 240, 0, 240, 1, 0, 0, 0, false, "ok")
 
     @Test
     fun `counts down from the verified report using the monotonic clock`() {

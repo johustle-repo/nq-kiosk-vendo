@@ -301,7 +301,8 @@ class MainActivity : FlutterActivity() {
                 engine.requireAdmin()
                 val address = call.argument<String>("address") ?: ""
                 val code = call.argument<String>("code") ?: ""
-                background(result) { engine.pairController(address, code).orThrowCode() }
+                val station = call.argument<Int>("station") ?: 1
+                background(result) { engine.pairController(address, code, station).orThrowCode() }
             }
             "setControllerAddress" -> {
                 engine.requireAdmin()

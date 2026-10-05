@@ -190,7 +190,7 @@ class PreviewKioskBridge implements KioskBridge {
   Future<void> requestNotificationPermission() async {}
 
   @override
-  Future<String> pairController(String address, String code) async =>
+  Future<String> pairController(String address, String code, int station) async =>
       _unsupported();
 
   @override

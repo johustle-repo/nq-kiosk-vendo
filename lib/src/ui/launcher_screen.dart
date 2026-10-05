@@ -104,12 +104,12 @@ class _LauncherScreenState extends State<LauncherScreen> {
       child: r.isCompact && !r.twoColumns
           ? TimerBar(
               remainingMs: s.remainingMs,
-              label: 'Time left',
+              label: s.controllerPaired && !s.isDemo ? 'Tablet ${s.controllerStation} · Time left' : 'Time left',
               hint: lowHint,
             )
           : TimerCard(
               remainingMs: s.remainingMs,
-              label: 'Time remaining',
+              label: s.controllerPaired && !s.isDemo ? 'Tablet ${s.controllerStation} · Time remaining' : 'Time remaining',
               size: r.isLandscapePhone ? r.timerSize : r.timerSize * 0.72,
               footer: lowHint,
             ),

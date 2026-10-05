@@ -76,7 +76,10 @@ class FakeKioskBridge implements KioskBridge {
   Future<void> setLockAdb(bool lock) async {}
 
   @override
-  Future<String> pairController(String address, String code) async => 'vk-test';
+  Future<String> pairController(String address, String code, int station) async {
+    calls.add('pair:$station');
+    return 'vk-test';
+  }
 
   @override
   Future<void> setControllerAddress(String address) async {}
@@ -150,6 +153,9 @@ Map<Object?, Object?> snapshot({
   int? lastAddedS,
   bool isDefaultHome = false,
   int idleSleepS = 60,
+  int station = 1,
+  int selectedStation = 0,
+  int heldPulses = 0,
 }) =>
     {
       'mode': mode,
@@ -169,6 +175,10 @@ Map<Object?, Object?> snapshot({
         'seq': seq,
         'lastCreditAgoMs': lastCreditAgoMs,
         'lastAddedS': lastAddedS,
+        'station': station,
+        'selectedStation': selectedStation,
+        'selectedTtlS': selectedStation == 0 ? 0 : 60,
+        'heldPulses': heldPulses,
       },
       'cloud': {'enrolled': cloudEnrolled, 'link': cloudLink, 'configVersion': 1},
       'settings': {'allowedPackages': allowed, 'lossTimeoutS': 30, 'lockAdb': false, 'isDefaultHome': isDefaultHome, 'idleSleepS': idleSleepS},

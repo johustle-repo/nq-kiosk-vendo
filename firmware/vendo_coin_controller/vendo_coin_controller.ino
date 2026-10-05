@@ -1,16 +1,22 @@
 /*
-  Vendo Kiosk — ESP8266 coin controller
-  =====================================
+  Vendo Kiosk — ESP8266 coin controller (one coin box, up to 4 tablets)
+  =====================================================================
   Board:   NodeMCU 1.0 (ESP-12E) or LOLIN(WEMOS) D1 mini, ESP8266 Arduino core 3.1.x
   Libs:    LiquidCrystal_I2C 1.1.x (Frank de Brabander). No JSON library needed.
 
-  This controller is the AUTHORITY for paid time:
-   - counts coin pulses (IRAM interrupt), groups them into one credit per coin,
-     adds seconds_per_pulse x pulses to the running session;
-   - serves an authenticated local HTTP API so the paired kiosk phone can read
-     the remaining time (responses are HMAC-signed over a phone nonce);
-   - reports coin events to the cloud over verified HTTPS (outbound only).
-  Nothing on the network can add time; only accepted coin pulses can.
+  This controller is the AUTHORITY for paid time on every tablet it serves:
+   - counts coin pulses (IRAM interrupt), groups them into one coin, and credits
+     them to the tablet the attendant selected on the dashboard (or the FLASH
+     button when offline). Coins with no selection are HELD, never lost, until
+     the attendant assigns them;
+   - keeps an independent timer per tablet (station 1..MAX_STATIONS);
+   - serves an authenticated local HTTP API so each paired tablet can read its
+     own remaining time (responses are HMAC-signed with that tablet's key over
+     a fresh tablet nonce);
+   - talks to the dashboard over verified HTTPS on ONE kept-alive connection:
+     a fast poll (selection + commands), event sync, and the status.php upload.
+  Time can be added by coins, and by audited dashboard commands
+  (add time / assign held coins), nothing else.
 
   See docs/ESP8266_FIRMWARE.md for wiring, power and level shifting.
 */
@@ -66,6 +72,7 @@ void IRAM_ATTR onCoinEdge() {
 
 // ============================================================ persistent settings
 Settings settings;
+Station stations[MAX_STATIONS + 1];  // index 1..MAX_STATIONS (0 unused)
 
 static const char *SETTINGS_FILE = "/settings.txt";
 static const char *SESSION_FILE = "/session.txt";
@@ -75,55 +82,68 @@ static const char *FORCE_SETUP_FILE = "/force_setup";
 LiquidCrystal_I2C *lcd = nullptr;
 ESP8266WebServer server(LOCAL_HTTP_PORT);
 BearSSL::X509List *trustAnchors = nullptr;
-BearSSL::Session tlsSession;
 
 String deviceId;  // "vk-" + chip id
-String bootId;    // random per boot: lets the phone and cloud detect restarts
+String bootId;    // random per boot: lets the tablets and cloud detect restarts
 
 bool setupMode = false;
 String apPassword;
 
-// Session (authoritative)
-bool sessionRunning = false;
-uint64_t sessionEndMs = 0;
-uint32_t sessionNo = 0;
-uint32_t eventSeq = 0;  // credit-event sequence number for this boot
-uint32_t lastAddedS = 0;
-uint32_t lastPulses = 0;
+uint32_t eventSeq = 0;  // event sequence number for this boot
 uint32_t committedPulses = 0;
 uint64_t lastCheckpointMs = 0;
 bool resumedFromCheckpoint = false;
+
+// Coins inserted while no tablet was selected (pesos = pulses).
+uint32_t heldPulses = 0;
+// Where the next coins go: 0 = nobody (coins are held).
+uint8_t selStation = 0;
+uint64_t selUntilMs = 0;
+uint32_t selVersionApplied = 0;  // dashboard selection version last applied
+uint8_t lastCoinStation = 0;     // for the LCD "last coin" line
+uint32_t lastCoinPulses = 0;
+
+// Dashboard commands applied (ring, persisted) and waiting to be acknowledged.
+uint32_t appliedCmds[APPLIED_CMD_RING] = {0};
+uint8_t appliedCmdNext = 0;
+struct Ack {
+  uint32_t id;
+  const char *result;
+};
+Ack pendingAcks[APPLIED_CMD_RING];
+uint8_t pendingAckCount = 0;
 
 // Cloud event buffer (bounded ring)
 Event events[EVENT_BUFFER_SIZE];
 uint8_t evStart = 0, evCount = 0;
 uint32_t droppedEvents = 0;
 
-// Cloud status
-CloudState cloudState = CLOUD_DISABLED;
+// One verified TLS connection, kept alive and shared by poll, sync and status upload.
+BearSSL::WiFiClientSecure netClient;
+HTTPClient netHttp;
+BearSSL::Session netSession;  // cached TLS session for fast reconnects
+
+CloudState cloudState = CLOUD_DISABLED;  // enrollment / event sync
+CloudState pollState = CLOUD_DISABLED;   // fast poll
+CloudState statusState = CLOUD_DISABLED; // status.php upload
+uint64_t nextSyncMs = 0;
+uint64_t nextPollMs = 0;
+uint32_t cloudFailures = 0;
+uint32_t pollFailures = 0;
+uint64_t lastCloudOkMs = 0;
 
 // status.php upload state
-BearSSL::WiFiClientSecure statusClient;  // kept open between uploads (keep-alive)
-HTTPClient statusHttp;
-BearSSL::Session statusSession;          // cached TLS session for fast reconnects
-char statusBootId[40];                   // same format as the original sketch
-uint32_t statusSequence = 0;             // counts uploads (as the original sketch did)
+char statusBootId[40];   // same format as the original sketch
+uint32_t statusSequence = 0;
 bool statusUploadNeeded = true;
 bool statusLastFailed = false;
 uint64_t lastStatusUploadMs = 0;
-CloudState statusState = CLOUD_DISABLED;
-uint64_t nextSyncMs = 0;
-uint32_t cloudFailures = 0;
-int16_t tlsRxBuffer = 0;  // 0 = not probed yet
-uint64_t lastCloudOkMs = 0;
 
 // Pairing / admin
 bool pairingOpen = false;
 uint64_t pairingUntilMs = 0;
 uint8_t pairingAttempts = 0;
 char pairingCode[7] = {0};
-uint32_t lastCmdCounter = 0;
-uint64_t lastPhonePollMs = 0;
 uint64_t infoUntilMs = 0;
 
 // ============================================================ helpers
@@ -176,9 +196,10 @@ bool hexToBytes(const String &hex, uint8_t *out, size_t len) {
   return true;
 }
 
-String hmacHex(const String &message) {
+// HMAC-SHA256 with a tablet's pairing key, as lowercase hex ("" if no key).
+String hmacHex(const String &keyHex, const String &message) {
   uint8_t key[32];
-  if (!hexToBytes(settings.pairKeyHex, key, sizeof(key))) return String();
+  if (!hexToBytes(keyHex, key, sizeof(key))) return String();
   br_hmac_key_context kc;
   br_hmac_key_init(&kc, &br_sha256_vtable, key, sizeof(key));
   br_hmac_context ctx;
@@ -233,6 +254,8 @@ uint32_t unixTimeOrZero() {
   return t > 1700000000 ? (uint32_t)t : 0;
 }
 
+bool validStation(long n) { return n >= 1 && n <= MAX_STATIONS; }
+
 // ============================================================ settings storage (LittleFS)
 // Format: key=value per line. Written only when something changes.
 bool saveSettings() {
@@ -244,8 +267,10 @@ bool saveSettings() {
   f.printf("api_base=%s\n", settings.apiBase.c_str());
   f.printf("cloud_token=%s\n", settings.cloudToken.c_str());
   f.printf("enroll_code=%s\n", settings.enrollCode.c_str());
-  f.printf("pair_key=%s\n", settings.pairKeyHex.c_str());
-  f.printf("paired_phone=%s\n", settings.pairedPhoneId.c_str());
+  for (uint8_t i = 1; i <= MAX_STATIONS; i++) {
+    f.printf("pair_key_%u=%s\n", i, stations[i].pairKeyHex.c_str());
+    f.printf("paired_phone_%u=%s\n", i, stations[i].pairedPhoneId.c_str());
+  }
   f.printf("seconds_per_pulse=%lu\n", (unsigned long)settings.secondsPerPulse);
   f.printf("rate_version=%lu\n", (unsigned long)settings.rateVersion);
   f.printf("sync_interval_s=%lu\n", (unsigned long)settings.syncIntervalS);
@@ -271,8 +296,11 @@ void loadSettings() {
     else if (k == "api_base" && v.startsWith("https://")) settings.apiBase = v;
     else if (k == "cloud_token") settings.cloudToken = v;
     else if (k == "enroll_code") settings.enrollCode = v;
-    else if (k == "pair_key") settings.pairKeyHex = v;
-    else if (k == "paired_phone") settings.pairedPhoneId = v;
+    // Firmware 1.x had a single phone: it becomes tablet 1.
+    else if (k == "pair_key") stations[1].pairKeyHex = v;
+    else if (k == "paired_phone") stations[1].pairedPhoneId = v;
+    else if (k.startsWith("pair_key_") && validStation(k.substring(9).toInt())) stations[k.substring(9).toInt()].pairKeyHex = v;
+    else if (k.startsWith("paired_phone_") && validStation(k.substring(13).toInt())) stations[k.substring(13).toInt()].pairedPhoneId = v;
     else if (k == "seconds_per_pulse") {
       uint32_t s = v.toInt();
       if (s >= 10 && s <= 3600) settings.secondsPerPulse = s;
@@ -288,42 +316,105 @@ void loadSettings() {
   f.close();
 }
 
-// ============================================================ session (authoritative time)
-uint32_t remainingSeconds() {
-  if (!sessionRunning) return 0;
+// ============================================================ tablets (authoritative time)
+uint32_t remainingSeconds(uint8_t n) {
+  const Station &s = stations[n];
+  if (!s.running) return 0;
   const uint64_t now = millis64();
-  if (now >= sessionEndMs) return 0;
-  return (uint32_t)((sessionEndMs - now + 999) / 1000);
+  if (now >= s.endMs) return 0;
+  return (uint32_t)((s.endMs - now + 999) / 1000);
 }
 
+bool anyRunning() {
+  for (uint8_t i = 1; i <= MAX_STATIONS; i++) {
+    if (remainingSeconds(i)) return true;
+  }
+  return false;
+}
+
+bool selectionActive() { return selStation != 0 && millis64() < selUntilMs; }
+
+// With exactly one tablet paired there is nothing to choose: its coins go
+// straight to it, as on a single-tablet kiosk. Returns 0 otherwise.
+uint8_t soleTablet() {
+  uint8_t found = 0;
+  for (uint8_t i = 1; i <= MAX_STATIONS; i++) {
+    if (stations[i].pairKeyHex.isEmpty()) continue;
+    if (found) return 0;
+    found = i;
+  }
+  return found;
+}
+
+// Where a coin inserted now goes: the attendant's selection, else the only paired tablet, else nobody (held).
+uint8_t coinTarget() { return selectionActive() ? selStation : soleTablet(); }
+
+uint32_t selectionTtlS() { return selectionActive() ? (uint32_t)((selUntilMs - millis64() + 999) / 1000) : 0; }
+
+void setSelection(uint8_t n, uint32_t ttlS) {
+  selStation = validStation(n) && ttlS ? n : 0;
+  selUntilMs = selStation ? millis64() + (uint64_t)ttlS * 1000ULL : 0;
+  Serial.printf("[select] next coins -> %s\n", selStation ? ("tablet " + String(selStation)).c_str() : "held");
+}
+
+// Checkpoint: each tablet's remaining time, held coins and recently applied
+// dashboard commands, so a restart neither loses paid time nor re-applies a
+// command whose acknowledgement had not reached the dashboard yet.
 void saveCheckpoint() {
-#if RESUME_AFTER_RESTART
   File f = LittleFS.open(SESSION_FILE, "w");
   if (!f) return;
-  f.printf("remaining=%lu\nsession_no=%lu\n", (unsigned long)remainingSeconds(), (unsigned long)sessionNo);
+#if RESUME_AFTER_RESTART
+  for (uint8_t i = 1; i <= MAX_STATIONS; i++) {
+    f.printf("s%u=%lu,%lu\n", i, (unsigned long)remainingSeconds(i), (unsigned long)stations[i].sessionNo);
+  }
+#endif
+  f.printf("held=%lu\n", (unsigned long)heldPulses);  // money, always kept
+  f.print("cmds=");
+  for (uint8_t i = 0; i < APPLIED_CMD_RING; i++) f.printf("%lu,", (unsigned long)appliedCmds[i]);
+  f.print("\n");
   f.close();
   lastCheckpointMs = millis64();
-#endif
 }
 
 void restoreCheckpoint() {
-#if RESUME_AFTER_RESTART
   File f = LittleFS.open(SESSION_FILE, "r");
   if (!f) return;
-  uint32_t remaining = 0, no = 0;
+  const uint64_t now = millis64();
   while (f.available()) {
     String line = f.readStringUntil('\n');
-    if (line.startsWith("remaining=")) remaining = line.substring(10).toInt();
-    else if (line.startsWith("session_no=")) no = line.substring(11).toInt();
+    uint8_t n = 0;
+    uint32_t remaining = 0, no = 0;
+    if (line.startsWith("remaining=")) {  // firmware 1.x: tablet 1
+      n = 1;
+      remaining = line.substring(10).toInt();
+    } else if (line.startsWith("session_no=")) {
+      stations[1].sessionNo = line.substring(11).toInt();
+    } else if (line.length() > 3 && line[0] == 's' && line[2] == '=' && validStation(line[1] - '0')) {
+      n = line[1] - '0';
+      const int comma = line.indexOf(',');
+      remaining = line.substring(3, comma < 0 ? line.length() : comma).toInt();
+      if (comma > 0) no = line.substring(comma + 1).toInt();
+      stations[n].sessionNo = no;
+    } else if (line.startsWith("held=")) {
+      heldPulses = line.substring(5).toInt();
+    } else if (line.startsWith("cmds=")) {
+      int from = 5;
+      for (uint8_t i = 0; i < APPLIED_CMD_RING; i++) {
+        const int comma = line.indexOf(',', from);
+        if (comma < 0) break;
+        appliedCmds[i] = line.substring(from, comma).toInt();
+        from = comma + 1;
+      }
+    }
+#if RESUME_AFTER_RESTART
+    if (validStation(n) && remaining > 0 && remaining <= MAX_SESSION_SECONDS) {
+      stations[n].running = true;
+      stations[n].endMs = now + (uint64_t)remaining * 1000ULL;
+      resumedFromCheckpoint = true;
+    }
+#endif
   }
   f.close();
-  if (remaining > 0 && remaining <= MAX_SESSION_SECONDS) {
-    sessionRunning = true;
-    sessionNo = no;
-    sessionEndMs = millis64() + (uint64_t)remaining * 1000ULL;
-    resumedFromCheckpoint = true;
-  }
-#endif
 }
 
 void pushEvent(const Event &e) {
@@ -337,31 +428,62 @@ void pushEvent(const Event &e) {
   evCount++;
 }
 
-void creditPulses(uint32_t pulses) {
-  const uint32_t add = pulses * settings.secondsPerPulse;
-  const uint64_t now = millis64();
-  if (!sessionRunning || sessionEndMs <= now) {
-    sessionRunning = true;
-    sessionNo++;
-    sessionEndMs = now;
-  }
-  sessionEndMs += (uint64_t)add * 1000ULL;  // additional coins extend the session
-  const uint64_t cap = now + (uint64_t)MAX_SESSION_SECONDS * 1000ULL;
-  if (sessionEndMs > cap) sessionEndMs = cap;
+void reportSoon() {
+  statusUploadNeeded = true;
+  const uint64_t soon = millis64() + MIN_SYNC_GAP_MS;
+  if (nextSyncMs > soon) nextSyncMs = soon;
+}
 
+// Adds time to tablet n. type: EV_CREDIT (coins), EV_ASSIGN (held coins) or EV_ADMIN_CREDIT.
+void addTime(uint8_t n, uint32_t pulses, uint32_t seconds, uint8_t type, uint32_t commandId) {
+  Station &s = stations[n];
+  const uint64_t now = millis64();
+  if (!s.running || s.endMs <= now) {
+    s.running = true;
+    s.sessionNo++;
+    s.endMs = now;
+  }
+  s.endMs += (uint64_t)seconds * 1000ULL;  // additional coins extend the session
+  const uint64_t cap = now + (uint64_t)MAX_SESSION_SECONDS * 1000ULL;
+  if (s.endMs > cap) s.endMs = cap;
+  s.lastAddedS = seconds;
+  if (pulses) s.lastPulses = pulses;
   eventSeq++;
-  lastAddedS = add;
-  lastPulses = pulses;
-  Event e{eventSeq, EV_CREDIT, sessionNo, (uint16_t)min<uint32_t>(pulses, 65535), add, settings.rateVersion,
-          remainingSeconds(), now, unixTimeOrZero()};
+  Event e{eventSeq, type, n, s.sessionNo, (uint16_t)min<uint32_t>(pulses, 65535), seconds, settings.rateVersion,
+          remainingSeconds(n), now, unixTimeOrZero(), commandId};
   pushEvent(e);
   saveCheckpoint();
-  Serial.printf("[coin] %lu pulse(s) -> +%lu s, remaining %lu s, seq %lu\n", (unsigned long)pulses,
-                (unsigned long)add, (unsigned long)remainingSeconds(), (unsigned long)eventSeq);
-  // Report soon (but not inside the pulse train of the next coin).
-  statusUploadNeeded = true;
-  const uint64_t soon = now + MIN_SYNC_GAP_MS;
-  if (nextSyncMs > soon) nextSyncMs = soon;
+  Serial.printf("[time] tablet %u +%lu s (%lu pulse(s), type %u), remaining %lu s, seq %lu\n", n, (unsigned long)seconds,
+                (unsigned long)pulses, type, (unsigned long)remainingSeconds(n), (unsigned long)eventSeq);
+  reportSoon();
+}
+
+void creditCoin(uint32_t pulses) {
+  lastCoinPulses = pulses;
+  const uint8_t target = coinTarget();
+  if (target) {
+    lastCoinStation = target;
+    if (selectionActive()) selUntilMs = millis64() + SELECTION_TTL_S * 1000ULL;  // keep it while coins keep coming
+    addTime(target, pulses, pulses * settings.secondsPerPulse, EV_CREDIT, 0);
+    return;
+  }
+  // Nobody selected: keep the money and let the attendant assign it.
+  lastCoinStation = 0;
+  heldPulses += pulses;
+  eventSeq++;
+  Event e{eventSeq, EV_HELD, 0, 0, (uint16_t)min<uint32_t>(pulses, 65535), 0, settings.rateVersion, 0, millis64(), unixTimeOrZero(), 0};
+  pushEvent(e);
+  saveCheckpoint();
+  Serial.printf("[coin] %lu pulse(s) held (no tablet selected), held total %lu\n", (unsigned long)pulses, (unsigned long)heldPulses);
+  reportSoon();
+}
+
+void assignHeld(uint8_t n, uint32_t commandId) {
+  if (!heldPulses) return;
+  const uint32_t pulses = heldPulses;
+  heldPulses = 0;
+  lastCoinStation = n;
+  addTime(n, pulses, pulses * settings.secondsPerPulse, EV_ASSIGN, commandId);  // also saves the checkpoint
 }
 
 void processPulses() {
@@ -371,35 +493,34 @@ void processPulses() {
   interrupts();
   const uint32_t pending = total - committedPulses;
   if (pending == 0) return;
-  // Wait until the coin's pulse train is complete, then credit it as one event.
+  // Wait until the coin's pulse train is complete, then credit it as one coin.
   if ((uint32_t)(micros() - lastUs) < PULSE_GROUP_TIMEOUT_MS * 1000UL) return;
   committedPulses = total;
-  creditPulses(pending);
+  creditCoin(pending);
+}
+
+void endSession(uint8_t n, uint8_t type, uint32_t commandId) {
+  Station &s = stations[n];
+  if (!s.running) return;
+  s.running = false;
+  eventSeq++;
+  Event e{eventSeq, type, n, s.sessionNo, 0, 0, settings.rateVersion, 0, millis64(), unixTimeOrZero(), commandId};
+  pushEvent(e);
+  saveCheckpoint();
+  Serial.printf("[session] tablet %u session #%lu %s\n", n, (unsigned long)s.sessionNo, type == EV_EXPIRE ? "expired" : "ended by admin");
+  reportSoon();
 }
 
 void checkExpiry() {
-  if (!sessionRunning) return;
   const uint64_t now = millis64();
-  if (now >= sessionEndMs) {
-    sessionRunning = false;
-    eventSeq++;
-    Event e{eventSeq, EV_EXPIRE, sessionNo, 0, 0, settings.rateVersion, 0, now, unixTimeOrZero()};
-    pushEvent(e);
-    saveCheckpoint();  // remaining=0
-    statusUploadNeeded = true;
-    Serial.printf("[session] #%lu expired\n", (unsigned long)sessionNo);
-    return;
+  for (uint8_t i = 1; i <= MAX_STATIONS; i++) {
+    if (stations[i].running && now >= stations[i].endMs) endSession(i, EV_EXPIRE, 0);
   }
-  if (now - lastCheckpointMs >= CHECKPOINT_INTERVAL_S * 1000ULL) saveCheckpoint();
+  if (selStation && now >= selUntilMs) selStation = 0;
+  if (anyRunning() && now - lastCheckpointMs >= CHECKPOINT_INTERVAL_S * 1000ULL) saveCheckpoint();
 }
 
-void endSessionByAdmin() {
-  if (!sessionRunning) return;
-  sessionEndMs = millis64();
-  checkExpiry();
-}
-
-// ============================================================ LCD (only changed rows are written)
+// ============================================================ LCD (20x4, I2C)
 String lcdRows[LCD_ROWS];
 
 // Custom LCD character 1: the peso sign (the HD44780 ROM has none). Slot 0 is
@@ -417,9 +538,16 @@ void lcdRow(uint8_t row, String text) {
   lcd->print(text);
 }
 
-String minutesText(uint32_t seconds) {
-  if (seconds % 60 == 0) return String(seconds / 60) + " min";
-  return String(seconds / 60) + "m " + String(seconds % 60) + "s";
+// One tablet in 10 columns: ">2 12:03  " (> = next coins go here).
+String tabletCell(uint8_t n) {
+  const uint32_t r = remainingSeconds(n);
+  char t[8];
+  if (!r) snprintf(t, sizeof(t), " --  ");
+  else if (r < 3600) snprintf(t, sizeof(t), "%02lu:%02lu", (unsigned long)(r / 60), (unsigned long)(r % 60));
+  else snprintf(t, sizeof(t), "%luh%02lu", (unsigned long)(r / 3600), (unsigned long)((r % 3600) / 60));
+  char cell[12];
+  snprintf(cell, sizeof(cell), "%c%u %-5s  ", coinTarget() == n ? '>' : ' ', n, t);
+  return String(cell).substring(0, 10);
 }
 
 void updateLcd() {
@@ -427,27 +555,33 @@ void updateLcd() {
   const uint64_t now = millis64();
   if (now - last < LCD_REFRESH_MS) return;
   last = now;
-  const uint32_t rem = remainingSeconds();
 
   if (setupMode) {
     lcdRow(0, "WIFI SETUP MODE");
     lcdRow(1, "AP:" + WiFi.softAPSSID());
     lcdRow(2, "Pass:" + apPassword);
-    lcdRow(3, rem ? "Time: " + hms(rem) : "Open 192.168.4.1");
+    lcdRow(3, "Open 192.168.4.1");
     return;
   }
-  lcdRow(0, rem ? "VeNdO  TIMER RUNNING" : "VeNdO  INSERT COIN");
-  lcdRow(1, "Time: " + hms(rem));
+  lcdRow(0, selectionActive() ? "VeNdO  Insert: Tab " + String(selStation)
+                              : soleTablet() ? String("VeNdO  INSERT COIN") : String("VeNdO  Ask staff"));
   if (pairingOpen) {
-    lcdRow(2, String("PAIR CODE: ") + pairingCode);
-    lcdRow(3, WiFi.localIP().toString());
-  } else if (now < infoUntilMs) {
-    lcdRow(2, WiFi.isConnected() ? WiFi.localIP().toString() : String("WiFi: not connected"));
-    lcdRow(3, deviceId + (cloudState == CLOUD_OK ? " cloud" : ""));
-  } else {
-    lcdRow(2, "Last added: " + minutesText(lastAddedS));
+    lcdRow(1, String("PAIR CODE: ") + pairingCode);
+    lcdRow(2, WiFi.localIP().toString());
+    lcdRow(3, "Enter on the tablet");
+    return;
+  }
+  lcdRow(1, tabletCell(1) + tabletCell(2));
+  lcdRow(2, MAX_STATIONS >= 4 ? tabletCell(3) + tabletCell(4) : String());
+  if (now < infoUntilMs) {
+    lcdRow(3, WiFi.isConnected() ? WiFi.localIP().toString() + (pollState == CLOUD_OK ? " online" : "") : String("WiFi: not connected"));
+  } else if (heldPulses) {
+    lcdRow(3, String("Held: ") + LCD_PESO + String(heldPulses) + " ask staff");
+  } else if (lastCoinPulses) {
     // One accepted pulse is one peso (1, 5, 10 and 20 peso coins).
-    lcdRow(3, String("Last coin: ") + LCD_PESO + String(lastPulses));
+    lcdRow(3, String("Last: ") + LCD_PESO + String(lastCoinPulses) + (lastCoinStation ? " Tab " + String(lastCoinStation) : String(" held")));
+  } else {
+    lcdRow(3, "Thank you!");
   }
 }
 
@@ -479,17 +613,6 @@ bool initLcd() {
     return true;
   }
   Serial.println("[lcd] no I2C display found (0x20-0x27, 0x38-0x3F) - check SDA=D2, SCL=D5, power, pull-ups");
-  Serial.print("[i2c] devices answering on the bus:");
-  uint8_t any = 0;
-  for (uint8_t addr = 1; addr < 127; addr++) {
-    Wire.beginTransmission(addr);
-    if (Wire.endTransmission() == 0) {
-      Serial.printf(" 0x%02X", addr);
-      any++;
-    }
-    yield();
-  }
-  Serial.println(any ? "" : " none (nothing connected, or SDA/SCL swapped)");
   return false;
 }
 
@@ -511,9 +634,9 @@ long jsonInt(const String &s, const char *key, int from = 0, long def = -1) {
   return neg ? -v : v;
 }
 
-String jsonStr(const String &s, const char *key) {
+String jsonStr(const String &s, const char *key, int from = 0) {
   String k = String('"') + key + "\":\"";
-  int i = s.indexOf(k);
+  int i = s.indexOf(k, from);
   if (i < 0) return String();
   i += k.length();
   int j = s.indexOf('"', i);
@@ -541,56 +664,45 @@ bool jsonArrayHas(const String &s, const char *key, uint32_t seq) {
   return false;
 }
 
-// ============================================================ cloud (outbound HTTPS only)
+// ============================================================ HTTPS (one kept-alive, verified connection)
 bool timeValid() { return time(nullptr) > 1700000000; }
 
-String apiHost() {
-  String b = settings.apiBase;
-  int start = b.indexOf("://");
-  start = start < 0 ? 0 : start + 3;
-  int end = b.indexOf('/', start);
-  return b.substring(start, end < 0 ? b.length() : end);
-}
-
-// POSTs JSON; returns HTTP status (negative on transport error).
-int httpsPostJson(const String &path, const String &body, String &response, bool auth) {
-  statusClient.stop();  // only one TLS connection at a time (RAM); its session cache keeps reconnects fast
-  BearSSL::WiFiClientSecure client;
-  client.setTrustAnchors(trustAnchors);  // full certificate verification
-  client.setX509Time(time(nullptr));
-  client.setSession(&tlsSession);       // TLS session resumption speeds up later syncs
-  if (tlsRxBuffer == 0) {
-    // Hostinger currently does not negotiate MFLN; fall back to the full 16 KB buffer.
-    tlsRxBuffer = BearSSL::WiFiClientSecure::probeMaxFragmentLength(apiHost(), 443, 4096) ? 4096 : 16384;
-    Serial.printf("[cloud] TLS rx buffer %d\n", tlsRxBuffer);
-  }
-  client.setBufferSizes(tlsRxBuffer, 512);
-  client.setTimeout(HTTP_TIMEOUT_MS);
-
-  HTTPClient http;
-  http.setTimeout(HTTP_TIMEOUT_MS);
-  http.setReuse(false);
-  if (!http.begin(client, settings.apiBase + path)) return -100;
-  http.addHeader("Content-Type", "application/json");
-  if (auth) {
-    http.addHeader("Authorization", "Bearer " + settings.cloudToken);
-  }
-  const int code = http.POST(body);
-  response = code > 0 ? http.getString() : String();
-  http.end();
+// POSTs JSON to url; returns the HTTP status (negative on transport error).
+// Poll, sync and the status upload share this connection, so the TLS handshake
+// is paid once and each request takes ~0.1-0.5 s.
+int httpsPost(const String &url, const String &body, const String &bearer, String &response) {
+  netClient.setX509Time(time(nullptr));
+  if (!netHttp.begin(netClient, url)) return -100;
+  netHttp.addHeader("Content-Type", "application/json");
+  if (bearer.length()) netHttp.addHeader("Authorization", "Bearer " + bearer);
+  const int code = netHttp.POST((uint8_t *)body.c_str(), body.length());
+  response = code > 0 ? netHttp.getString() : String();  // read fully so the connection can be reused
+  netHttp.end();  // keeps the socket open when the server allows keep-alive
   if (code < 0) {
     char err[80];
-    client.getLastSSLError(err, sizeof(err));
-    Serial.printf("[cloud] transport error %d (%s) %s\n", code, http.errorToString(code).c_str(), err);
+    netClient.getLastSSLError(err, sizeof(err));
+    Serial.printf("[net] transport error %d (%s) %s\n", code, HTTPClient::errorToString(code).c_str(), err);
   }
   return code;
 }
 
+bool pulsesPending() {
+  noInterrupts();
+  const bool pending = isrInPulse || isrAcceptedPulses != committedPulses;
+  interrupts();
+  return pending;
+}
+
+bool cloudReady() {
+  return !setupMode && WiFi.isConnected() && timeValid() && settings.cloudToken.length() && cloudState != CLOUD_UNAUTHORIZED;
+}
+
+// ============================================================ cloud enrollment + event sync
 void cloudEnroll() {
   String body = String("{\"device_type\":\"controller\",\"enrollment_code\":\"") + sanitize(settings.enrollCode, 32) +
                 "\",\"name\":\"" + sanitize(settings.deviceName, 60) + "\",\"hardware_id\":\"" + deviceId + "\"}";
   String resp;
-  const int code = httpsPostJson("/devices/enroll", body, resp, false);
+  const int code = httpsPost(settings.apiBase + "/devices/enroll", body, String(), resp);
   if (code == 201) {
     String token = jsonStr(resp, "device_token");
     if (token.startsWith("vkd_")) {
@@ -613,39 +725,64 @@ void cloudEnroll() {
   cloudState = CLOUD_ERROR;
 }
 
+const char *eventTypeName(uint8_t t) {
+  switch (t) {
+    case EV_CREDIT: return "credit";
+    case EV_EXPIRE: return "expire";
+    case EV_HELD: return "held";
+    case EV_ASSIGN: return "assign";
+    case EV_ADMIN_CREDIT: return "admin_credit";
+    default: return "admin_end";
+  }
+}
+
 String buildSyncBody(uint8_t &countOut) {
   String b;
-  b.reserve(600 + EVENTS_PER_SYNC * 190);
+  b.reserve(900 + EVENTS_PER_SYNC * 220);
   b += "{\"protocol\":" + String(PROTOCOL_VERSION);
   b += ",\"boot_id\":\"" + bootId + "\"";
   b += ",\"uptime_ms\":" + u64str(millis64());
   b += ",\"fw_version\":\"" FW_VERSION "\"";
   b += ",\"config_version_applied\":" + String(settings.rateVersion);
-  b += ",\"status\":{\"session\":\"" + String(remainingSeconds() ? "running" : "idle") + "\"";
-  b += ",\"remaining_s\":" + String(remainingSeconds());
+  // Top-level session fields describe tablet 1 (compatible with protocol 1 readers).
+  b += ",\"status\":{\"session\":\"" + String(remainingSeconds(1) ? "running" : "idle") + "\"";
+  b += ",\"remaining_s\":" + String(remainingSeconds(1));
   b += ",\"seq\":" + String(eventSeq);
-  b += ",\"session_no\":" + String(sessionNo);
+  b += ",\"session_no\":" + String(stations[1].sessionNo);
   b += ",\"seconds_per_pulse\":" + String(settings.secondsPerPulse);
   b += ",\"rate_version\":" + String(settings.rateVersion);
   b += ",\"wifi_rssi\":" + String(WiFi.RSSI());
   b += ",\"free_heap\":" + String(ESP.getFreeHeap());
   b += ",\"buffered_events\":" + String(evCount);
   b += ",\"dropped_events\":" + String(droppedEvents);
-  b += ",\"phone_last_poll_age_s\":" + String(lastPhonePollMs ? (long)((millis64() - lastPhonePollMs) / 1000) : -1L);
-  b += "},\"events\":[";
+  b += ",\"held_pulses\":" + String(heldPulses);
+  b += ",\"stations\":[";
+  for (uint8_t i = 1; i <= MAX_STATIONS; i++) {
+    const Station &s = stations[i];
+    if (i > 1) b += ',';
+    b += "{\"station\":" + String(i);
+    b += ",\"session\":\"" + String(remainingSeconds(i) ? "running" : "idle") + "\"";
+    b += ",\"remaining_s\":" + String(remainingSeconds(i));
+    b += ",\"session_no\":" + String(s.sessionNo);
+    b += ",\"paired\":" + String(s.pairKeyHex.length() ? "true" : "false");
+    b += ",\"phone_last_poll_age_s\":" + String(s.lastPhonePollMs ? (long)((millis64() - s.lastPhonePollMs) / 1000) : -1L) + "}";
+  }
+  b += "]},\"events\":[";
   countOut = min<uint8_t>(evCount, EVENTS_PER_SYNC);
   for (uint8_t i = 0; i < countOut; i++) {
     const Event &e = events[(evStart + i) % EVENT_BUFFER_SIZE];
     if (i) b += ',';
     b += "{\"seq\":" + String(e.seq);
-    b += ",\"type\":\"" + String(e.type == EV_CREDIT ? "credit" : "expire") + "\"";
+    b += ",\"type\":\"" + String(eventTypeName(e.type)) + "\"";
+    b += ",\"station\":" + String(e.station);
     b += ",\"session_no\":" + String(e.sessionNo);
     b += ",\"pulses\":" + String(e.pulses);
     b += ",\"seconds\":" + String(e.seconds);
     b += ",\"rate_version\":" + String(e.rateVersion);
     b += ",\"remaining_after\":" + String(e.remainingAfter);
     b += ",\"uptime_ms\":" + u64str(e.uptimeMs);
-    b += ",\"unix_time\":" + String(e.unixTime) + "}";
+    b += ",\"unix_time\":" + String(e.unixTime);
+    b += ",\"command_id\":" + String(e.commandId) + "}";
   }
   b += "]}";
   return b;
@@ -680,9 +817,8 @@ void applyCloudConfig(const String &resp) {
 
 void cloudSync() {
   uint8_t count = 0;
-  String body = buildSyncBody(count);
   String resp;
-  const int code = httpsPostJson("/controller/sync", body, resp, true);
+  const int code = httpsPost(settings.apiBase + "/controller/sync", buildSyncBody(count), settings.cloudToken, resp);
   if (code == 200) {
     removeAckedEvents(resp);
     applyCloudConfig(resp);
@@ -711,7 +847,7 @@ void cloudLoop() {
     return;
   }
   const uint64_t now = millis64();
-  if (now < nextSyncMs) return;
+  if (now < nextSyncMs || pulsesPending()) return;
   if (!settings.enrollCode.isEmpty()) cloudEnroll();
   else cloudSync();
   // Exponential backoff on failure, capped; normal interval otherwise.
@@ -720,47 +856,135 @@ void cloudLoop() {
   nextSyncMs = millis64() + (uint64_t)delayS * 1000ULL;
 }
 
-// ============================================================ status.php upload (existing database)
-bool pulsesPending() {
-  noInterrupts();
-  const bool pending = isrInPulse || isrAcceptedPulses != committedPulses;
-  interrupts();
-  return pending;
+// ============================================================ fast poll: attendant selection + dashboard commands
+bool commandApplied(uint32_t id) {
+  for (uint8_t i = 0; i < APPLIED_CMD_RING; i++) {
+    if (appliedCmds[i] == id) return true;
+  }
+  return false;
 }
 
+void queueAck(uint32_t id, const char *result) {
+  for (uint8_t i = 0; i < pendingAckCount; i++) {
+    if (pendingAcks[i].id == id) return;
+  }
+  if (pendingAckCount < APPLIED_CMD_RING) pendingAcks[pendingAckCount++] = {id, result};
+}
+
+// Applies one command object from the poll reply, at most once per id.
+void applyCommand(const String &obj) {
+  const long id = jsonInt(obj, "id");
+  if (id <= 0) return;
+  if (commandApplied((uint32_t)id)) {
+    queueAck((uint32_t)id, "ok");  // applied before; the ack was lost
+    return;
+  }
+  const String type = jsonStr(obj, "type");
+  const long n = jsonInt(obj, "station");
+  const long seconds = jsonInt(obj, "seconds", 0, 0);
+  const char *result = "ok";
+  if (!validStation(n)) result = "bad_station";
+  else if (type == "add_time") {
+    if (seconds >= 60 && seconds <= (long)MAX_ADMIN_CREDIT_S) addTime(n, 0, seconds, EV_ADMIN_CREDIT, id);
+    else result = "bad_seconds";
+  } else if (type == "end_session") {
+    if (stations[n].running) endSession(n, EV_ADMIN_END, id);
+    else result = "not_running";
+  } else if (type == "assign_held") {
+    if (heldPulses) assignHeld(n, id);
+    else result = "nothing_held";
+  } else {
+    result = "unknown_type";
+  }
+  appliedCmds[appliedCmdNext] = (uint32_t)id;
+  appliedCmdNext = (appliedCmdNext + 1) % APPLIED_CMD_RING;
+  saveCheckpoint();  // remember the id before the ack can reach the dashboard
+  queueAck((uint32_t)id, result);
+  Serial.printf("[cmd] #%ld %s tablet %ld: %s\n", id, type.c_str(), n, result);
+}
+
+void controllerPoll() {
+  String b;
+  b.reserve(220 + pendingAckCount * 40);
+  b += "{\"boot_id\":\"" + bootId + "\"";
+  b += ",\"selected\":" + String(selectionActive() ? selStation : 0);
+  b += ",\"selected_ttl_s\":" + String(selectionTtlS());
+  b += ",\"held_pulses\":" + String(heldPulses);
+  b += ",\"acks\":[";
+  const uint8_t sentAcks = pendingAckCount;
+  for (uint8_t i = 0; i < sentAcks; i++) {
+    if (i) b += ',';
+    b += "{\"id\":" + String(pendingAcks[i].id) + ",\"result\":\"" + pendingAcks[i].result + "\"}";
+  }
+  b += "]}";
+  String resp;
+  const int code = httpsPost(settings.apiBase + "/controller/poll", b, settings.cloudToken, resp);
+  if (code != 200) {
+    pollState = code == 401 ? CLOUD_UNAUTHORIZED : CLOUD_ERROR;
+    pollFailures++;
+    return;
+  }
+  pollState = CLOUD_OK;
+  pollFailures = 0;
+  // Acks delivered: drop the ones we sent (new ones may have been queued meanwhile).
+  for (uint8_t i = sentAcks; i < pendingAckCount; i++) pendingAcks[i - sentAcks] = pendingAcks[i];
+  pendingAckCount -= sentAcks;
+
+  // Attendant selection: apply only a newer version (a local button choice stays until then).
+  const int selAt = resp.indexOf("\"selection\":");
+  if (selAt >= 0) {
+    const long version = jsonInt(resp, "version", selAt, 0);
+    if (version > 0 && (uint32_t)version != selVersionApplied) {
+      selVersionApplied = (uint32_t)version;
+      setSelection((uint8_t)jsonInt(resp, "station", selAt, 0), (uint32_t)jsonInt(resp, "ttl_s", selAt, 0));
+    }
+  }
+  // Commands: an array of flat objects.
+  int at = resp.indexOf("\"commands\":[");
+  if (at < 0) return;
+  const int end = resp.indexOf(']', at);
+  while (end > 0) {
+    const int open = resp.indexOf('{', at);
+    if (open < 0 || open > end) break;
+    const int close = resp.indexOf('}', open);
+    if (close < 0 || close > end) break;
+    applyCommand(resp.substring(open, close + 1));
+    at = close + 1;
+  }
+}
+
+void pollLoop() {
+  if (!cloudReady()) {
+    pollState = settings.cloudToken.length() ? CLOUD_WAIT_TIME : CLOUD_DISABLED;
+    return;
+  }
+  const uint64_t now = millis64();
+  if (now < nextPollMs || pulsesPending()) return;
+  controllerPoll();
+  const uint64_t backoff = pollFailures ? min<uint64_t>(POLL_BACKOFF_MAX_MS, (uint64_t)POLL_INTERVAL_MS << min<uint32_t>(pollFailures, 4)) : POLL_INTERVAL_MS;
+  nextPollMs = millis64() + backoff;
+}
+
+// ============================================================ status.php upload (existing database, tablet 1)
 bool statusUpload() {
   const uint32_t started = millis();
-  statusClient.setX509Time(time(nullptr));
-  if (!statusHttp.begin(statusClient, settings.statusUrl)) {
-    Serial.println("[status] HTTPS init failed");
-    return false;
-  }
-  statusHttp.addHeader("Content-Type", "application/json");
-  statusHttp.addHeader("Authorization", "Bearer " + settings.statusToken);
   statusSequence++;
   char body[300];
   snprintf(body, sizeof(body),
            "{\"device_id\":\"%s\",\"boot_id\":\"%s\",\"sequence\":%lu,\"remaining_seconds\":%lu,\"last_pulses\":%lu}",
            sanitize(settings.statusDeviceId, 64).c_str(), statusBootId, (unsigned long)statusSequence,
-           (unsigned long)remainingSeconds(), (unsigned long)lastPulses);
-  const int code = statusHttp.POST((uint8_t *)body, strlen(body));
-  bool ok = false;
+           (unsigned long)remainingSeconds(1), (unsigned long)stations[1].lastPulses);
+  String resp;
+  const int code = httpsPost(settings.statusUrl, String(body), settings.statusToken, resp);
+  const bool ok = code == 200 && resp.indexOf("\"saved\"") >= 0;
   if (code > 0) {
-    String resp = statusHttp.getString();  // read fully so the connection can be reused
-    ok = code == 200 && resp.indexOf("\"saved\"") >= 0;
     Serial.printf("[status] upload #%lu: HTTP %d in %lu ms%s\n", (unsigned long)statusSequence, code,
                   (unsigned long)(millis() - started), ok ? "" : " (not saved)");
     if (code == 401 || code == 403) {
       statusState = CLOUD_UNAUTHORIZED;
-      // The server's own reason (never contains our token).
-      Serial.printf("[status] server says: %s\n", resp.substring(0, 160).c_str());
+      Serial.printf("[status] server says: %s\n", resp.substring(0, 160).c_str());  // never contains our token
     }
-  } else {
-    char err[100];
-    statusClient.getLastSSLError(err, sizeof(err));
-    Serial.printf("[status] upload failed: %s %s\n", HTTPClient::errorToString(code).c_str(), err);
   }
-  statusHttp.end();  // keeps the socket open when the server allows keep-alive
   return ok;
 }
 
@@ -775,7 +999,7 @@ void statusLoop() {
     return;
   }
   const uint64_t since = millis64() - lastStatusUploadMs;
-  const uint64_t periodic = remainingSeconds() ? STATUS_RUNNING_INTERVAL_MS : STATUS_IDLE_INTERVAL_MS;
+  const uint64_t periodic = remainingSeconds(1) ? STATUS_RUNNING_INTERVAL_MS : STATUS_IDLE_INTERVAL_MS;
   // A rejected token will not fix itself: retry slowly (60 s) instead of every 5 s.
   const uint64_t minGap = statusState == CLOUD_UNAUTHORIZED ? 60000ULL : statusLastFailed ? STATUS_RETRY_MS : STATUS_MIN_GAP_MS;
   const bool due = (statusUploadNeeded && since >= minGap) || since >= periodic;
@@ -791,7 +1015,7 @@ void statusLoop() {
   }
 }
 
-// ============================================================ local HTTP API (phone)
+// ============================================================ local HTTP API (tablets, protocol 2)
 const char *cloudStateName(CloudState state = cloudState) {
   switch (state) {
     case CLOUD_OK: return "ok";
@@ -811,45 +1035,66 @@ void sendError(int code, const char *err) {
   sendJson(code, String("{\"ok\":false,\"error\":\"") + err + "\"}");
 }
 
+// Tablet number from ?station=N, or 0 (and an error response) when invalid.
+uint8_t stationArg() {
+  const long n = server.arg("station").toInt();
+  if (!validStation(n)) {
+    sendError(400, "bad_station");
+    return 0;
+  }
+  return (uint8_t)n;
+}
+
 // GET /api/v1/info — unauthenticated, contains no secrets and cannot change anything.
 void handleInfo() {
   String b = "{\"ok\":true,\"protocol\":" + String(PROTOCOL_VERSION) + ",\"device_id\":\"" + deviceId +
-             "\",\"fw_version\":\"" FW_VERSION "\",\"paired\":" + (settings.pairKeyHex.length() ? "true" : "false") +
-             ",\"pairing_open\":" + (pairingOpen ? "true" : "false") + "}";
+             "\",\"fw_version\":\"" FW_VERSION "\",\"stations\":" + String(MAX_STATIONS) + ",\"paired\":[";
+  for (uint8_t i = 1; i <= MAX_STATIONS; i++) {
+    if (i > 1) b += ',';
+    b += stations[i].pairKeyHex.length() ? "true" : "false";
+  }
+  b += "],\"pairing_open\":" + String(pairingOpen ? "true" : "false") + "}";
   sendJson(200, b);
 }
 
-// GET /api/v1/status?nonce=<16-64 hex>
-// Body is signed: X-VK-Signature = HMAC-SHA256(key, "VK1|status|" + nonce + "|" + body)
+// GET /api/v1/status?station=N&nonce=<16-64 hex>
+// Signed with tablet N's key: X-VK-Signature = HMAC-SHA256(key, "VK2|status|N|" + nonce + "|" + body)
 void handleStatus() {
-  if (settings.pairKeyHex.isEmpty()) return sendError(403, "not_paired");
+  const uint8_t n = stationArg();
+  if (!n) return;
+  Station &s = stations[n];
+  if (s.pairKeyHex.isEmpty()) return sendError(403, "not_paired");
   const String nonce = server.arg("nonce");
   if (!isHex(nonce, 16, 64)) return sendError(400, "bad_nonce");
-  lastPhonePollMs = millis64();
-  const uint32_t rem = remainingSeconds();
+  s.lastPhonePollMs = millis64();
+  const uint32_t rem = remainingSeconds(n);
   String b;
-  b.reserve(420);
+  b.reserve(520);
   b += "{\"ok\":true,\"protocol\":" + String(PROTOCOL_VERSION);
   b += ",\"device_id\":\"" + deviceId + "\"";
   b += ",\"boot_id\":\"" + bootId + "\"";
+  b += ",\"station\":" + String(n);
   b += ",\"uptime_ms\":" + u64str(millis64());
   b += ",\"seq\":" + String(eventSeq);
-  b += ",\"session_no\":" + String(sessionNo);
+  b += ",\"session_no\":" + String(s.sessionNo);
   b += ",\"session\":\"" + String(rem ? "running" : "idle") + "\"";
   b += ",\"remaining_s\":" + String(rem);
   b += ",\"seconds_per_pulse\":" + String(settings.secondsPerPulse);
   b += ",\"rate_version\":" + String(settings.rateVersion);
-  b += ",\"last_added_s\":" + String(lastAddedS);
-  b += ",\"last_pulses\":" + String(lastPulses);
+  b += ",\"last_added_s\":" + String(s.lastAddedS);
+  b += ",\"last_pulses\":" + String(s.lastPulses);
+  b += ",\"selected_station\":" + String(coinTarget());
+  b += ",\"selected_ttl_s\":" + String(selectionTtlS());
+  b += ",\"held_pulses\":" + String(heldPulses);
   b += ",\"resumed\":" + String(resumedFromCheckpoint ? "true" : "false");
-  b += ",\"cloud\":\"" + String(cloudStateName()) + "\"";
+  b += ",\"cloud\":\"" + String(cloudStateName(pollState)) + "\"";
   b += ",\"status_upload\":\"" + String(cloudStateName(statusState)) + "\"";
   b += ",\"nonce\":\"" + nonce + "\"}";
-  server.sendHeader("X-VK-Signature", hmacHex("VK1|status|" + nonce + "|" + b));
+  server.sendHeader("X-VK-Signature", hmacHex(s.pairKeyHex, "VK2|status|" + String(n) + "|" + nonce + "|" + b));
   sendJson(200, b);
 }
 
-// POST /api/v1/pair  (form: code, phone_id) — only while the physical pairing window is open.
+// POST /api/v1/pair  (form: code, phone_id, station) — only while the physical pairing window is open.
 void handlePair() {
   if (!pairingOpen) return sendError(403, "pairing_closed");
   if (pairingAttempts >= PAIRING_MAX_ATTEMPTS) return sendError(429, "too_many_attempts");
@@ -859,49 +1104,59 @@ void handlePair() {
     if (pairingAttempts >= PAIRING_MAX_ATTEMPTS) pairingOpen = false;
     return sendError(403, "wrong_code");
   }
-  settings.pairKeyHex = randomHex(32);
-  settings.pairedPhoneId = sanitize(server.arg("phone_id"), 40);
+  const uint8_t n = stationArg();
+  if (!n) return;
+  Station &s = stations[n];
+  const bool replaced = s.pairKeyHex.length() > 0;
+  s.pairKeyHex = randomHex(32);
+  s.pairedPhoneId = sanitize(server.arg("phone_id"), 40);
+  s.lastCmdCounter = 0;
   saveSettings();
   pairingOpen = false;
-  lastCmdCounter = 0;
-  sendJson(200, "{\"ok\":true,\"device_id\":\"" + deviceId + "\",\"boot_id\":\"" + bootId + "\",\"key\":\"" + settings.pairKeyHex + "\"}");
-  Serial.println("[pair] phone paired; previous pairing replaced");
+  sendJson(200, "{\"ok\":true,\"device_id\":\"" + deviceId + "\",\"boot_id\":\"" + bootId + "\",\"station\":" + String(n) +
+                    ",\"key\":\"" + s.pairKeyHex + "\"}");
+  Serial.printf("[pair] tablet %u paired%s\n", n, replaced ? " (previous pairing replaced)" : "");
 }
 
-// Authenticated phone command: mac = HMAC(key, "VK1|cmd|<name>|<boot_id>|<ctr>"),
-// ctr strictly increasing within this boot (prevents replay).
-bool verifyCommand(const char *name) {
-  if (settings.pairKeyHex.isEmpty()) {
+// Authenticated tablet command: mac = HMAC(key_N, "VK2|cmd|<name>|N|<boot_id>|<ctr>"),
+// ctr strictly increasing per tablet within this boot (prevents replay).
+uint8_t verifyCommand(const char *name) {
+  const uint8_t n = stationArg();
+  if (!n) return 0;
+  Station &s = stations[n];
+  if (s.pairKeyHex.isEmpty()) {
     sendError(403, "not_paired");
-    return false;
+    return 0;
   }
   const String boot = server.arg("boot_id");
   const uint32_t ctr = strtoul(server.arg("ctr").c_str(), nullptr, 10);
   const String mac = server.arg("mac");
-  if (boot != bootId || ctr <= lastCmdCounter) {
+  if (boot != bootId || ctr <= s.lastCmdCounter) {
     sendError(409, "stale_command");
-    return false;
+    return 0;
   }
-  const String expected = hmacHex(String("VK1|cmd|") + name + "|" + boot + "|" + String(ctr));
+  const String expected = hmacHex(s.pairKeyHex, String("VK2|cmd|") + name + "|" + String(n) + "|" + boot + "|" + String(ctr));
   if (!constantTimeEquals(mac, expected)) {
     sendError(403, "bad_mac");
-    return false;
+    return 0;
   }
-  lastCmdCounter = ctr;
-  return true;
+  s.lastCmdCounter = ctr;
+  return n;
 }
 
 void handleEndSession() {
-  if (!verifyCommand("end_session")) return;
-  endSessionByAdmin();
+  const uint8_t n = verifyCommand("end_session");
+  if (!n) return;
+  endSession(n, EV_ADMIN_END, 0);
   sendJson(200, "{\"ok\":true}");
 }
 
 void handleUnpair() {
-  if (!verifyCommand("unpair")) return;
+  const uint8_t n = verifyCommand("unpair");
+  if (!n) return;
   sendJson(200, "{\"ok\":true}");
-  settings.pairKeyHex = "";
-  settings.pairedPhoneId = "";
+  stations[n].pairKeyHex = "";
+  stations[n].pairedPhoneId = "";
   saveSettings();
 }
 
@@ -933,12 +1188,12 @@ void handleSetupPage() {
   p += F("\"></label><label>Wi-Fi password<input name=pass type=password maxlength=64 placeholder='(unchanged if empty)'></label>"
          "<label>Controller name<input name=name maxlength=60 value=\"");
   p += htmlEscape(settings.deviceName);
-  p += F("\"></label><label>Cloud enrollment code (from the dashboard; optional)<input name=enroll maxlength=16 placeholder='XXXXX-XXXXX'></label>"
+  p += F("\"></label><label>Cloud enrollment code (from the dashboard; needed to choose tablets from the dashboard)<input name=enroll maxlength=16 placeholder='XXXXX-XXXXX'></label>"
          "<label>API base URL<input name=api maxlength=120 value=\"");
   p += htmlEscape(settings.apiBase);
   p += F("\"></label><p>Cloud: ");
   p += settings.cloudToken.length() ? "enrolled" : "not enrolled";
-  p += F("</p><h2>Upload to existing status.php</h2><label>Status URL<input name=status_url maxlength=120 value=\"");
+  p += F("</p><h2>Upload to existing status.php (tablet 1)</h2><label>Status URL<input name=status_url maxlength=120 value=\"");
   p += htmlEscape(settings.statusUrl);
   p += F("\"></label><label>Status device ID<input name=status_device maxlength=64 value=\"");
   p += htmlEscape(settings.statusDeviceId);
@@ -947,7 +1202,7 @@ void handleSetupPage() {
   p += settings.statusToken.length() ? F("(saved; leave empty to keep)") : F("(not set: upload disabled)");
   p += F("'></label><label><input type=checkbox name=status_clear value=1 style='width:auto'> Remove the saved upload token</label>"
          "<button>Save and restart</button></form>"
-         "<p><small>Saving does not change paid time. Phone pairing is separate: hold the FLASH button 3 s in normal mode.</small></p>");
+         "<p><small>Saving does not change paid time. Tablet pairing is separate: hold the FLASH button 3 s in normal mode.</small></p>");
   server.send(200, "text/html", p);
 }
 
@@ -983,7 +1238,16 @@ void handleSetupSave() {
   ESP.restart();
 }
 
-// ============================================================ button (pairing / info / setup)
+// ============================================================ FLASH button
+// short press  → next coins go to the next tablet (offline fallback; inside the locked box)
+// hold 1-3 s   → show IP / device id on the LCD for 10 s
+// hold 3 s     → open the tablet pairing window
+// hold 10 s    → restart into Wi-Fi setup
+void cycleSelection() {
+  const uint8_t next = selectionActive() ? selStation + 1 : 1;
+  setSelection(next > MAX_STATIONS ? 0 : next, SELECTION_TTL_S);
+}
+
 void buttonLoop() {
   static uint64_t downSince = 0;
   static bool wasDown = false;
@@ -1009,9 +1273,10 @@ void buttonLoop() {
       openPairingWindow();
     }
   }
-  if (!down && wasDown) {
+  if (!down && wasDown && !setupMode) {
     const uint64_t held = now - downSince;
-    if (held >= 50 && held < BUTTON_INFO_MAX_MS) infoUntilMs = now + 10000;
+    if (held >= 50 && held < BUTTON_INFO_MAX_MS) cycleSelection();
+    else if (held >= BUTTON_INFO_HOLD_MS && held < BUTTON_PAIR_HOLD_MS) infoUntilMs = now + 10000;
   }
   wasDown = down;
   if (pairingOpen && now >= pairingUntilMs) pairingOpen = false;
@@ -1072,16 +1337,19 @@ void setup() {
   trustAnchors = new BearSSL::X509List(TRUST_ANCHORS_PEM);
   snprintf(statusBootId, sizeof(statusBootId), "%06lx-%08lx-%08lx", (unsigned long)ESP.getChipId(),
            (unsigned long)ESP.random(), (unsigned long)ESP.random());
-  statusClient.setTrustAnchors(trustAnchors);  // verified HTTPS, never setInsecure()
-  statusClient.setSession(&statusSession);
-  statusClient.setTimeout(HTTP_TIMEOUT_MS);
-  statusHttp.setReuse(true);
-  statusHttp.setTimeout(HTTP_TIMEOUT_MS);
-  lastStatusUploadMs = 0;
+  netClient.setTrustAnchors(trustAnchors);  // verified HTTPS, never setInsecure()
+  netClient.setSession(&netSession);
+  netClient.setTimeout(HTTP_TIMEOUT_MS);
+  netHttp.setReuse(true);
+  netHttp.setTimeout(HTTP_TIMEOUT_MS);
   startWifi();
   nextSyncMs = millis64() + 5000;
-  Serial.printf("[boot] device %s boot %s rate %lu s/pulse%s\n", deviceId.c_str(), bootId.c_str(),
-                (unsigned long)settings.secondsPerPulse, resumedFromCheckpoint ? " (session restored)" : "");
+  nextPollMs = millis64() + 3000;
+  uint8_t paired = 0;
+  for (uint8_t i = 1; i <= MAX_STATIONS; i++) paired += stations[i].pairKeyHex.length() ? 1 : 0;
+  Serial.printf("[boot] device %s boot %s rate %lu s/pulse, %u tablet(s) paired, %lu peso(s) held%s\n", deviceId.c_str(),
+                bootId.c_str(), (unsigned long)settings.secondsPerPulse, paired, (unsigned long)heldPulses,
+                resumedFromCheckpoint ? " (sessions restored)" : "");
 }
 
 void logWifiChanges() {
@@ -1090,14 +1358,14 @@ void logWifiChanges() {
   if (now == was || setupMode) return;
   was = now;
   if (now) {
-    Serial.printf("[wifi] connected to %s, IP %s (use this IP to pair the phone)\n", WiFi.SSID().c_str(),
+    Serial.printf("[wifi] connected to %s, IP %s (use this IP to pair the tablets)\n", WiFi.SSID().c_str(),
                   WiFi.localIP().toString().c_str());
   } else {
-    Serial.println("[wifi] disconnected; coins and the timer keep working");
+    Serial.println("[wifi] disconnected; coins and the timers keep working");
   }
 }
 
-// Opens the 2-minute phone pairing window with a fresh 6-digit code.
+// Opens the 2-minute tablet pairing window with a fresh 6-digit code.
 // Triggered by holding FLASH 3 s or by the USB serial command "pair".
 void openPairingWindow() {
   snprintf(pairingCode, sizeof(pairingCode), "%06lu", (unsigned long)(ESP.random() % 1000000UL));
@@ -1108,8 +1376,10 @@ void openPairingWindow() {
   Serial.printf("[pair] pairing window open for 120 s: code %s, IP %s\n", pairingCode, WiFi.localIP().toString().c_str());
 }
 
-// USB serial settings (physical access, like the FLASH button or reflashing):
-//   pair                      → open the phone pairing window and print the code
+// USB serial commands (physical access, like the FLASH button or reflashing):
+//   pair                      → open the tablet pairing window and print the code
+//   status                    → print every tablet's time, selection and held coins
+//   select=N                  → next coins go to tablet N (0 = hold)
 //   status_token=<token>      status_device_id=<id>      status_url=https://...
 // Values are saved to flash; the token is never printed back.
 void serialConfigLoop() {
@@ -1129,10 +1399,18 @@ void serialConfigLoop() {
     if (key == "pair") {
       openPairingWindow();
     } else if (key == "status") {
-      Serial.printf("[status] remaining %lu s, session %s, last added %lu s (%lu pulses), paired %s, IP %s, upload %s\n",
-                    (unsigned long)remainingSeconds(), remainingSeconds() ? "running" : "idle", (unsigned long)lastAddedS,
-                    (unsigned long)lastPulses, settings.pairKeyHex.length() ? "yes" : "no",
-                    WiFi.localIP().toString().c_str(), cloudStateName(statusState));
+      Serial.printf("[status] IP %s, poll %s, sync %s, upload %s, next coins -> %s (%lu s), held %lu peso(s)\n",
+                    WiFi.localIP().toString().c_str(), cloudStateName(pollState), cloudStateName(cloudState),
+                    cloudStateName(statusState), coinTarget() ? ("tablet " + String(coinTarget()) + (selectionActive() ? "" : " (only paired tablet)")).c_str() : "held",
+                    (unsigned long)selectionTtlS(), (unsigned long)heldPulses);
+      for (uint8_t i = 1; i <= MAX_STATIONS; i++) {
+        Serial.printf("[status] tablet %u: %s remaining %lu s, session %lu, last %lu pulse(s), paired %s\n", i,
+                      remainingSeconds(i) ? "running" : "idle", (unsigned long)remainingSeconds(i),
+                      (unsigned long)stations[i].sessionNo, (unsigned long)stations[i].lastPulses,
+                      stations[i].pairKeyHex.length() ? "yes" : "no");
+      }
+    } else if (key == "select") {
+      setSelection(value.toInt(), SELECTION_TTL_S);
     } else if (key == "status_token" && value.length() >= 16) {
       settings.statusToken = value;
       changed = true;
@@ -1165,7 +1443,8 @@ void loop() {
   buttonLoop();
   server.handleClient();
   updateLcd();
-  statusLoop();  // fast path to the existing database (typically 0.1-0.5 s with keep-alive)
-  cloudLoop();   // optional /api/v1 dashboard sync; may block ~1-3 s during a TLS handshake
+  pollLoop();    // attendant selection + dashboard commands (~2 s, kept-alive TLS)
+  statusLoop();  // existing status.php database (tablet 1)
+  cloudLoop();   // event sync to the dashboard
   yield();
 }

@@ -288,13 +288,14 @@ class KioskEngine private constructor(context: Context) {
         val address = store.controllerAddress ?: return
         val key = controllerKey ?: return
         val expectedId = store.controllerDeviceId
+        val station = store.controllerStation
         if (!pollInFlight.compareAndSet(false, true)) return
         pollExecutor.execute {
             val result = try {
                 val nonce = ByteArray(16).also { random.nextBytes(it) }.toHex()
-                val r = http.get(address, "/api/v1/status?nonce=$nonce")
+                val r = http.get(address, "/api/v1/status?station=$station&nonce=$nonce")
                 if (r.status != 200) throw ProtocolException("http_${r.status}", "Controller returned ${r.status}")
-                Result.success(ControllerProtocol.verifyStatus(r.body, r.headers["x-vk-signature"], nonce, key, expectedId))
+                Result.success(ControllerProtocol.verifyStatus(r.body, r.headers["x-vk-signature"], nonce, key, expectedId, station))
             } catch (e: Exception) {
                 Result.failure<ControllerStatus>(e)
             } finally {
@@ -368,6 +369,7 @@ class KioskEngine private constructor(context: Context) {
             .put(
                 "controller", JSONObject()
                     .put("paired", controllerKey != null)
+                    .put("station", store.controllerStation)
                     .put("link", tracker.link(t).name.lowercase())
                     .put("last_ok_age_s", tracker.ageMs(t)?.div(1000) ?: -1)
                     .put("remaining_s", s?.let { tracker.estimatedRemainingMs(t) / 1000 } ?: 0)
@@ -440,6 +442,10 @@ class KioskEngine private constructor(context: Context) {
                 "paired" to (controllerKey != null && store.controllerAddress != null),
                 "address" to store.controllerAddress,
                 "deviceId" to store.controllerDeviceId,
+                "station" to store.controllerStation,
+                "selectedStation" to s?.selectedStation,
+                "selectedTtlS" to s?.selectedTtlS,
+                "heldPulses" to s?.heldPulses,
                 "link" to tracker.link(t).name.lowercase(),
                 "lastOkAgoMs" to tracker.ageMs(t),
                 "lastError" to tracker.lastError,
@@ -631,16 +637,21 @@ class KioskEngine private constructor(context: Context) {
     }
 
     /** Blocking (call off the main thread). */
-    fun pairController(address: String, code: String): Result<String> = try {
+    fun pairController(address: String, code: String, station: Int): Result<String> = try {
+        if (!ControllerProtocol.isValidStation(station)) throw IllegalArgumentException("bad_station")
         val parsed = LocalHttp.parseLocalAddress(address) ?: throw IllegalArgumentException("bad_address")
         val normalized = "${parsed.first}:${parsed.second}"
-        val r = http.postForm(normalized, "/api/v1/pair", mapOf("code" to code.trim(), "phone_id" to store.phoneId))
+        val r = http.postForm(
+            normalized, "/api/v1/pair",
+            mapOf("code" to code.trim(), "phone_id" to store.phoneId, "station" to station.toString())
+        )
         if (r.status != 200) {
             val err = try { JSONObject(r.body).optString("error", "http_${r.status}") } catch (e: Exception) { "http_${r.status}" }
             throw ProtocolException(err, "Pairing failed: $err")
         }
-        val pair = ControllerProtocol.parsePairResponse(r.body)
+        val pair = ControllerProtocol.parsePairResponse(r.body, station)
         store.controllerAddress = normalized
+        store.controllerStation = station
         store.controllerDeviceId = pair.deviceId
         store.controllerKey = pair.key
         controllerKey = pair.key
@@ -663,9 +674,13 @@ class KioskEngine private constructor(context: Context) {
         val key = controllerKey ?: throw IllegalStateException("not_paired")
         val boot = tracker.last?.bootId ?: throw IllegalStateException("controller_not_connected")
         val ctr = store.nextCommandCounter()
+        val station = store.controllerStation
         val r = http.postForm(
             address, "/api/v1/${if (name == "end_session") "session/end" else name}",
-            mapOf("boot_id" to boot, "ctr" to ctr.toString(), "mac" to ControllerProtocol.commandMac(key, name, boot, ctr))
+            mapOf(
+                "station" to station.toString(), "boot_id" to boot, "ctr" to ctr.toString(),
+                "mac" to ControllerProtocol.commandMac(key, name, station, boot, ctr),
+            )
         )
         if (r.status != 200) throw ProtocolException("http_${r.status}", r.body.take(100))
         Result.success(Unit)

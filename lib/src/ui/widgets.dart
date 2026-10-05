@@ -496,6 +496,37 @@ class RateStrip extends StatelessWidget {
   );
 }
 
+/// "Tablet 2" badge on a shared coin box; green with a check when the
+/// attendant has sent the next coins to this tablet.
+class TabletBadge extends StatelessWidget {
+  const TabletBadge({super.key, required this.station, this.ready = false});
+
+  final int station;
+  final bool ready;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    key: const Key('tablet-badge'),
+    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+    decoration: BoxDecoration(
+      color: ready ? KioskPalette.accent : KioskPalette.surface,
+      borderRadius: BorderRadius.circular(40),
+      border: Border.all(color: ready ? KioskPalette.accent : KioskPalette.outline, width: 1.5),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(ready ? Icons.check_circle : Icons.tablet_android, size: 22, color: ready ? Colors.white : KioskPalette.charcoal),
+        const SizedBox(width: 8),
+        Text(
+          'Tablet $station',
+          style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: ready ? Colors.white : KioskPalette.text),
+        ),
+      ],
+    ),
+  );
+}
+
 /// 12-hour clock text, e.g. "1:42 PM".
 String clockText(DateTime t) {
   final h = t.hour % 12 == 0 ? 12 : t.hour % 12;

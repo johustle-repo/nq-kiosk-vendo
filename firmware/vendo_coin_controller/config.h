@@ -3,8 +3,17 @@
 // are NOT here; they are set through the setup portal or the cloud dashboard.
 #pragma once
 
-#define FW_VERSION "1.1.0"
-#define PROTOCOL_VERSION 1
+#define FW_VERSION "2.0.0"
+// Local phone protocol 2: one coin box, up to MAX_STATIONS tablets, per-tablet keys.
+#define PROTOCOL_VERSION 2
+
+// ---------------------------------------------------------------- tablets
+#define MAX_STATIONS 4
+// An attendant's "next coins -> tablet N" lasts this long after the selection
+// or the last coin, so a forgotten selection cannot misroute later coins.
+#define SELECTION_TTL_S 90UL
+// Largest single free-time grant accepted from the dashboard.
+#define MAX_ADMIN_CREDIT_S (4UL * 3600UL)
 
 // ---------------------------------------------------------------- pins
 // NodeMCU / Wemos D1 mini labels in comments.
@@ -49,6 +58,12 @@
 #define LOCAL_HTTP_PORT 80
 #define DEFAULT_API_BASE "https://vendo-kiosk.ebnleadgen.online/api/v1"
 #define DEFAULT_SYNC_INTERVAL_S 15UL
+// Fast poll for the attendant's selection and dashboard commands (kept-alive TLS).
+#define POLL_INTERVAL_MS 2000UL
+#define POLL_BACKOFF_MAX_MS 30000UL
+// Dashboard command ids applied recently (also kept across restarts) so a
+// re-sent command is never applied twice.
+#define APPLIED_CMD_RING 16
 #define MIN_SYNC_GAP_MS 3000UL          // earliest re-sync after a coin
 #define CLOUD_BACKOFF_MAX_S 300UL
 #define HTTP_TIMEOUT_MS 8000
@@ -74,7 +89,8 @@
 // ---------------------------------------------------------------- pairing / admin
 #define PAIRING_WINDOW_MS 120000UL
 #define PAIRING_MAX_ATTEMPTS 5
-#define BUTTON_INFO_MAX_MS 1000UL    // short press: show IP / device ID
+#define BUTTON_INFO_MAX_MS 1000UL    // short press: next tablet selection (offline fallback)
+#define BUTTON_INFO_HOLD_MS 1000UL   // hold 1-3 s: show IP / device ID
 #define BUTTON_PAIR_HOLD_MS 3000UL   // hold 3 s: open phone pairing window
 #define BUTTON_SETUP_HOLD_MS 10000UL // hold 10 s: restart into Wi-Fi setup portal
 

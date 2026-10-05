@@ -22,6 +22,10 @@ class KioskState {
     this.controllerPaired = false,
     this.controllerAddress,
     this.controllerDeviceId,
+    this.controllerStation = 1,
+    this.selectedStation = 0,
+    this.selectedTtlS = 0,
+    this.heldPulses = 0,
     this.controllerLink = ControllerLink.never,
     this.controllerLastOkAgoMs,
     this.controllerLastError,
@@ -64,6 +68,19 @@ class KioskState {
   final bool controllerPaired;
   final String? controllerAddress;
   final String? controllerDeviceId;
+
+  /// This tablet's number on the shared coin box (1-4).
+  final int controllerStation;
+
+  /// Tablet the coin box sends the next coins to (0 = none: coins are held).
+  final int selectedStation;
+  final int selectedTtlS;
+
+  /// Coins inserted with no tablet selected, waiting for the attendant.
+  final int heldPulses;
+
+  /// The attendant selected this tablet: coins inserted now go here.
+  bool get coinBoxReadyForMe => selectedStation != 0 && selectedStation == controllerStation;
   final ControllerLink controllerLink;
   final int? controllerLastOkAgoMs;
   final String? controllerLastError;
@@ -160,6 +177,10 @@ class KioskState {
       controllerPaired: ctl['paired'] == true,
       controllerAddress: ctl['address'] as String?,
       controllerDeviceId: ctl['deviceId'] as String?,
+      controllerStation: _int(ctl['station']) ?? 1,
+      selectedStation: _int(ctl['selectedStation']) ?? 0,
+      selectedTtlS: _int(ctl['selectedTtlS']) ?? 0,
+      heldPulses: _int(ctl['heldPulses']) ?? 0,
       controllerLink: _link(ctl['link']),
       controllerLastOkAgoMs: _int(ctl['lastOkAgoMs']),
       controllerLastError: ctl['lastError'] as String?,

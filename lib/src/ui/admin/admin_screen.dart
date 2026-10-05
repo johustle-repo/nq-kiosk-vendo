@@ -886,6 +886,7 @@ class _CoinBoxPageState extends State<_CoinBoxPage> {
   late final _timeout = TextEditingController(
     text: widget.controller.state.lossTimeoutS.toString(),
   );
+  late int _station = widget.controller.state.controllerStation;
   bool _busy = false;
 
   @override
@@ -920,6 +921,15 @@ class _CoinBoxPageState extends State<_CoinBoxPage> {
           children: [
             InfoRow('Controller', s.controllerDeviceId, mono: true),
             InfoRow('Address', s.controllerAddress, mono: true),
+            InfoRow('This tablet', s.controllerPaired ? 'Tablet ${s.controllerStation}' : null),
+            InfoRow(
+              'Next coins go to',
+              !s.controllerPaired
+                  ? null
+                  : s.selectedStation == 0
+                  ? (s.heldPulses > 0 ? 'Nobody (₱${s.heldPulses} held)' : 'Nobody')
+                  : 'Tablet ${s.selectedStation} (${s.selectedTtlS} s)',
+            ),
             InfoRow(
               'Remaining (verified)',
               s.accessSource == 'controller' ? formatHms(s.remainingMs) : '—',
@@ -954,11 +964,22 @@ class _CoinBoxPageState extends State<_CoinBoxPage> {
           icon: Icons.link,
           title: s.controllerPaired
               ? 'Re-pair or change address'
-              : 'Pair this phone',
+              : 'Pair this tablet',
           description:
-              'Phone and coin box must be on the same Wi-Fi. Hold the coin box FLASH button for 3 seconds '
-              'to show a 6-digit code (valid 2 minutes), then enter it here. Pairing replaces any previous phone.',
+              'Tablet and coin box must be on the same Wi-Fi. One coin box serves up to 4 tablets: give each '
+              'tablet its own number. Hold the coin box FLASH button for 3 seconds to show a 6-digit code '
+              '(valid 2 minutes), then enter it here. Pairing replaces any tablet with the same number.',
           children: [
+            DropdownButtonFormField<int>(
+              key: const Key('pair-station'),
+              initialValue: _station,
+              decoration: const InputDecoration(labelText: 'Tablet number'),
+              items: [
+                for (var n = 1; n <= 4; n++) DropdownMenuItem(value: n, child: Text('Tablet $n')),
+              ],
+              onChanged: (v) => setState(() => _station = v ?? 1),
+            ),
+            const SizedBox(height: 12),
             TextField(
               controller: _address,
               keyboardType: const TextInputType.numberWithOptions(
@@ -999,11 +1020,12 @@ class _CoinBoxPageState extends State<_CoinBoxPage> {
                             final id = await b.pairController(
                               _address.text,
                               _code.text,
+                              _station,
                             );
                             _code.clear();
                             if (context.mounted) {
                               ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text('Paired with $id')),
+                                SnackBar(content: Text('Paired with $id as Tablet $_station')),
                               );
                             }
                           });
