@@ -159,3 +159,9 @@ it('refuses to send coins or time to an empty tablet slot', function () {
         ->call('addTime', 4, 5);
     expect($site->fresh()->activeSelection())->toBeNull()->and(ControllerCommand::count())->toBe(0);
 });
+
+it('sends the content security policy as a header and in the page', function () {
+    $res = $this->get('/login')->assertOk();
+    expect($res->headers->get('Content-Security-Policy'))->toContain("script-src 'self' 'nonce-")->toContain("frame-ancestors 'none'");
+    $res->assertSee('<meta http-equiv="Content-Security-Policy" content="default-src', false);
+});

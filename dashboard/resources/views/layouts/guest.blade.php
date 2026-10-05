@@ -2,6 +2,9 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
+    @if (request()->attributes->get('csp_policy'))
+        <meta http-equiv="Content-Security-Policy" content="{{ request()->attributes->get('csp_policy') }}">
+    @endif
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex, nofollow">
     <meta name="theme-color" content="#018E4E">

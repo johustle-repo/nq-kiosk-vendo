@@ -21,6 +21,28 @@ MySQL). It replaces the earlier plain-PHP backend, which was never deployed.
 No SSH, Node.js, queue worker or cron is required on the server: assets are
 built on your PC, and devices use short outbound HTTPS requests.
 
+## Live installation (2026-10-05)
+
+* SSH: `ssh -p 65002 u942457715@147.93.80.65` (deploy key `~/.ssh/vendo_hostinger`).
+  Use `/opt/alt/php84/usr/bin/php` (the default CLI `php` is 8.3).
+* Web root of the subdomain: `~/domains/ebnleadgen.online/public_html/vendo-kiosk/`
+  (inside the main site's folder; the main site is a separate Laravel app — do
+  not touch it). It holds the dashboard's public files **and** the existing
+  `api/` (`status.php`, `db.php`, `health.php`).
+* App: `~/vendo_dashboard/` (`index.php` points there with an absolute path).
+* Database: shared with `status.php` (`u942457715_vendodb`; its `device_status`
+  and `device_tokens` tables sit next to the dashboard's). **Never run
+  `migrate:fresh`/`db:wipe` there** — it would delete the live status data.
+* Backups made before installing: `~/backups/vendo-kiosk-public-*.tar.gz`.
+* Hostinger's server replaces the app's `Content-Security-Policy` header with
+  `upgrade-insecure-requests`; the layouts therefore also send the policy as a
+  `<meta http-equiv>` tag, which browsers enforce in addition.
+
+Updating the live app: build the zip, upload it, extract to a temporary folder,
+then copy `vendo_dashboard/` over `~/vendo_dashboard/` (keep `.env` and
+`storage/`) and `public_html/` into the web root (keep `api/`); run
+`php artisan migrate --force`, `config:cache`, `route:cache`, `view:cache`.
+
 ## Folder layout on the server
 
 ```

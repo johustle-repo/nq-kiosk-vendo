@@ -21,8 +21,6 @@ class SecurityHeaders
         Vite::useCspNonce($nonce);
         $request->attributes->set('csp_nonce', $nonce);
 
-        $response = $next($request);
-
         $script = "'self' 'nonce-{$nonce}'";
         $connect = "'self'";
         if (app()->environment('local')) {
@@ -30,13 +28,21 @@ class SecurityHeaders
             $script .= ' http://localhost:5173';
             $connect .= ' ws://localhost:5173 http://localhost:5173';
         }
+        $policy = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+            ."script-src {$script}; connect-src {$connect}; form-action 'self'; base-uri 'none'";
+        // Also emitted as a <meta> tag by the layouts: Hostinger's server replaces
+        // this header with its own "upgrade-insecure-requests", and browsers
+        // enforce a meta policy in addition to any header.
+        $request->attributes->set('csp_policy', $policy);
+
+        $response = $next($request);
+
         $headers = [
             'Cache-Control' => 'no-store, max-age=0',
             'X-Content-Type-Options' => 'nosniff',
             'Referrer-Policy' => 'same-origin',
             'X-Frame-Options' => 'DENY',
-            'Content-Security-Policy' => "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
-                ."script-src {$script}; connect-src {$connect}; frame-ancestors 'none'; form-action 'self'; base-uri 'none'",
+            'Content-Security-Policy' => $policy."; frame-ancestors 'none'",
         ];
         if ($request->isSecure()) {
             $headers['Strict-Transport-Security'] = 'max-age=31536000';
