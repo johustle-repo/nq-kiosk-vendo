@@ -72,7 +72,10 @@
 // and dropped_events is incremented (reported to the dashboard). Local paid
 // time is never affected by cloud buffering.
 #define EVENT_BUFFER_SIZE 48
-#define EVENTS_PER_SYNC 16
+// Kept small: the sync body is built while the 16 KB TLS buffer is allocated,
+// and a large batch (e.g. after an outage) ran the heap out. The rest follow on
+// the next syncs a few seconds later.
+#define EVENTS_PER_SYNC 6
 
 // ---------------------------------------------------------------- status.php upload (existing database)
 // Compatible with the original sketch: POSTs {"device_id","boot_id","sequence",

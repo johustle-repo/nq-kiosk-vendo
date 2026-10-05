@@ -737,8 +737,9 @@ const char *eventTypeName(uint8_t t) {
 }
 
 String buildSyncBody(uint8_t &countOut) {
+  countOut = min<uint8_t>(evCount, EVENTS_PER_SYNC);
   String b;
-  b.reserve(900 + EVENTS_PER_SYNC * 220);
+  b.reserve(760 + countOut * 230);  // what this batch needs, not the maximum
   b += "{\"protocol\":" + String(PROTOCOL_VERSION);
   b += ",\"boot_id\":\"" + bootId + "\"";
   b += ",\"uptime_ms\":" + u64str(millis64());
@@ -768,7 +769,6 @@ String buildSyncBody(uint8_t &countOut) {
     b += ",\"phone_last_poll_age_s\":" + String(s.lastPhonePollMs ? (long)((millis64() - s.lastPhonePollMs) / 1000) : -1L) + "}";
   }
   b += "]},\"events\":[";
-  countOut = min<uint8_t>(evCount, EVENTS_PER_SYNC);
   for (uint8_t i = 0; i < countOut; i++) {
     const Event &e = events[(evStart + i) % EVENT_BUFFER_SIZE];
     if (i) b += ',';
@@ -853,6 +853,8 @@ void cloudLoop() {
   // Exponential backoff on failure, capped; normal interval otherwise.
   uint32_t delayS = settings.syncIntervalS;
   if (cloudState == CLOUD_ERROR) delayS = min<uint32_t>(CLOUD_BACKOFF_MAX_S, settings.syncIntervalS << min<uint32_t>(cloudFailures, 5));
+  // A backlog drains in small batches: the next one in a few seconds, not a full interval.
+  else if (cloudState == CLOUD_OK && evCount > 0) delayS = MIN_SYNC_GAP_MS / 1000;
   nextSyncMs = millis64() + (uint64_t)delayS * 1000ULL;
 }
 
@@ -1400,6 +1402,8 @@ void serialConfigLoop() {
     if (key == "pair") {
       openPairingWindow();
     } else if (key == "status") {
+      Serial.printf("[status] heap free %u B, largest block %u B, buffered events %u\n", ESP.getFreeHeap(),
+                    ESP.getMaxFreeBlockSize(), evCount);
       Serial.printf("[status] IP %s, poll %s, sync %s, upload %s, next coins -> %s (%lu s), held %lu peso(s)\n",
                     WiFi.localIP().toString().c_str(), cloudStateName(pollState), cloudStateName(cloudState),
                     cloudStateName(statusState), coinTarget() ? ("tablet " + String(coinTarget()) + (selectionActive() ? "" : " (only paired tablet)")).c_str() : "held",
