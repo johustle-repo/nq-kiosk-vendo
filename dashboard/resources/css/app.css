@@ -3,7 +3,45 @@
 @source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
 @source '../../storage/framework/views/*.php';
 
+/* VeNdO logo colours: charcoal letters, green "N", gold peso coin. */
 @theme {
-    --font-sans: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
-        'Segoe UI Symbol', 'Noto Color Emoji';
+    --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    --color-brand: #018e4e;
+    --color-brand-deep: #017040;
+    --color-brand-soft: #d4f2e2;
+    --color-charcoal: #36383a;
+    --color-ink: #1f2123;
+    --color-coin: #b97d0c;
+    --color-coin-soft: #fbefd6;
+    --color-canvas: #f4f5f5;
+}
+
+@utility btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-xl px-3.5 py-2 text-sm font-semibold transition
+        disabled:cursor-not-allowed disabled:opacity-50;
+}
+@utility btn-primary {
+    @apply btn bg-brand text-white hover:bg-brand-deep;
+}
+@utility btn-outline {
+    @apply btn border border-zinc-300 bg-white text-ink hover:border-brand hover:text-brand;
+}
+@utility btn-danger {
+    @apply btn border border-red-300 bg-white text-red-700 hover:bg-red-50;
+}
+@utility card {
+    @apply rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm;
+}
+@utility field {
+    @apply mt-1 block w-full rounded-xl border border-zinc-300 bg-white px-3 py-2 text-ink focus:border-brand focus:ring-2
+        focus:ring-brand-soft focus:outline-none;
+}
+@utility label {
+    @apply block text-sm font-semibold text-charcoal;
+}
+@utility pill {
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-bold tracking-wide;
+}
+@utility muted {
+    @apply text-sm text-zinc-500;
 }
