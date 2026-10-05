@@ -75,10 +75,7 @@ class _AdminScreenState extends State<AdminScreen> {
                 titleSpacing: wide ? 24 : 16,
                 title: Row(
                   children: [
-                    const Icon(
-                      Icons.admin_panel_settings,
-                      color: KioskPalette.accent,
-                    ),
+                    Image.asset(kCoinAsset, width: 28, height: 28, excludeFromSemantics: true),
                     const SizedBox(width: 10),
                     const Flexible(
                       child: Text(
@@ -929,7 +926,7 @@ class _CoinBoxPageState extends State<_CoinBoxPage> {
             ),
             InfoRow(
               'Rate',
-              '${s.secondsPerPulse} s per pulse (${Rates.describeDuration(s.secondsPerPulse)})',
+              '${s.secondsPerPulse} s per peso (${Rates.describeDuration(s.secondsPerPulse)})',
             ),
             InfoRow(
               'Last report',
@@ -1318,8 +1315,8 @@ class _SystemPageState extends State<_SystemPage> {
           icon: Icons.brightness_low_outlined,
           title: 'Screen',
           description:
-              'With no paid time, the screen goes dark after this long without touches. '
-              'Inserting a coin turns it back on; touching the dark screen does not.',
+              'With no paid time, the kiosk logo is shown after this long without touches. '
+              'The screen stays on; a touch returns to the payment screen and a coin starts a session.',
           children: [
             DropdownButtonFormField<int>(
               key: const Key('idle-sleep'),
@@ -1327,7 +1324,7 @@ class _SystemPageState extends State<_SystemPage> {
               initialValue: const [0, 30, 60, 120, 300].contains(s.idleSleepS)
                   ? s.idleSleepS
                   : 60,
-              decoration: const InputDecoration(labelText: 'Sleep when idle'),
+              decoration: const InputDecoration(labelText: 'Show logo when idle'),
               items: const [
                 DropdownMenuItem(value: 0, child: Text('Never')),
                 DropdownMenuItem(value: 30, child: Text('After 30 seconds')),

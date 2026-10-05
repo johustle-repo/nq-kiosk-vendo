@@ -54,6 +54,7 @@ class KioskEngine private constructor(context: Context) {
         private const val POLL_INTERVAL_MS = 1_000L
         private const val CLOUD_INTERVAL_MS = 30_000L
         private const val ADMIN_UNLOCK_MS = 5 * 60_000L
+        private const val RELOCK_INTERVAL_MS = 3_000L
 
         @Volatile private var instance: KioskEngine? = null
 
@@ -97,6 +98,7 @@ class KioskEngine private constructor(context: Context) {
     private var cachedOwnerAtMs = 0L
     private var wakeLock: PowerManager.WakeLock? = null
     @Volatile var lastTickAtMs = 0L
+    private var lastRelockAtMs = 0L
         private set
 
     // ---- cloud state (written by cloud executor, read when emitting)
@@ -122,6 +124,24 @@ class KioskEngine private constructor(context: Context) {
             appliedPackages = emptyList()
         }
         handler.post(tickRunnable)
+    }
+
+    /**
+     * Fail-safe reset for receivers (boot, app update, watchdog): only the kiosk
+     * is allowed until the next evaluation re-grants from a verified report.
+     * The restriction applies immediately on the caller's thread (the engine
+     * thread may be the thing that is stuck); the applied-policy cache is then
+     * cleared on the engine thread, so a session [enforce] already granted is
+     * re-applied instead of being left with an empty allowlist.
+     */
+    fun restrictToKiosk(): Boolean {
+        if (store.mode != KioskMode.PRODUCTION) return false
+        val ok = policy.setPaidAccess(null)
+        handler.post {
+            appliedGrant = null
+            if (running) evaluate()
+        }
+        return ok
     }
 
     fun stop() = handler.post {
@@ -157,6 +177,17 @@ class KioskEngine private constructor(context: Context) {
         if (store.mode == KioskMode.PRODUCTION && t - lastWatchdogAtMs >= 50_000) {
             lastWatchdogAtMs = t
             WatchdogReceiver.schedule(ctx)
+        }
+        // Self-heal: production must always run in lock task. An app update or a
+        // crash kills the kiosk task and Android resumes whatever was below it
+        // (e.g. the stock launcher). Skipped while an administrator is unlocked,
+        // because "Exit kiosk" stops lock task on purpose.
+        if (store.mode == KioskMode.PRODUCTION && !isAdminUnlocked() &&
+            t - lastRelockAtMs >= RELOCK_INTERVAL_MS && policy.lockTaskState() == "none" && isDeviceOwner()
+        ) {
+            lastRelockAtMs = t
+            Log.w(TAG, "Self-heal: not in lock task; bringing the kiosk back")
+            bringKioskToFront()
         }
         if (t - lastEmitAtMs >= 1_000) emit()
     }

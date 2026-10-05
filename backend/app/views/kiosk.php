@@ -20,7 +20,7 @@
             Remaining <strong data-field="remaining"><?= h(hms((int) ($s['remaining_s'] ?? 0))) ?></strong> (<?= h($s['session'] ?? '?') ?>)<br>
             <span class="muted small">as of <span data-field="reported"><?= h(ago($d['status_reported_at'])) ?></span>
             · seq <?= (int) ($s['seq'] ?? 0) ?> · boot <?= h($d['status_boot_id']) ?>
-            · rate <?= (int) ($s['seconds_per_pulse'] ?? 0) ?> s/pulse
+            · rate <?= (int) ($s['seconds_per_pulse'] ?? 0) ?> s per peso
             <?php if (!empty($s['dropped_events'])): ?> · <span class="bad"><?= (int) $s['dropped_events'] ?> events dropped (buffer overflow)</span><?php endif; ?>
             <?php if (isset($s['wifi_rssi'])): ?> · RSSI <?= (int) $s['wifi_rssi'] ?> dBm<?php endif; ?></span>
           <?php elseif ($s && $d['device_type'] === 'phone'): ?>
@@ -68,13 +68,13 @@
      Rate changes apply to <strong>future</strong> coins only; time already paid is never recalculated.</p>
   <form method="post" action="/kiosks/<?= (int) $kiosk['id'] ?>/config"><?= csrf_field($csrf) ?>
     <div class="row">
-      <label>Seconds per coin pulse <input name="seconds_per_pulse" type="number" min="10" max="3600" required value="<?= (int) $config['seconds_per_pulse'] ?>"></label>
+      <label>Seconds per peso <input name="seconds_per_pulse" type="number" min="10" max="3600" required value="<?= (int) $config['seconds_per_pulse'] ?>"></label>
       <label>Local connection-loss timeout (s) <input name="local_loss_timeout_s" type="number" min="5" max="600" required value="<?= (int) $config['local_loss_timeout_s'] ?>"></label>
       <label>Controller cloud sync interval (s) <input name="controller_sync_interval_s" type="number" min="5" max="300" required value="<?= (int) $config['controller_sync_interval_s'] ?>"></label>
     </div>
     <p class="small rates">
       <?php $spp = (int) $config['seconds_per_pulse']; foreach ([1, 5, 10, 20] as $p): ?>
-        <span><?= $p ?> pulse<?= $p > 1 ? 's' : '' ?> = <?= h(rtrim(rtrim(number_format($p * $spp / 60, 1), '0'), '.')) ?> min</span>
+        <span>₱<?= $p ?> = <?= h(rtrim(rtrim(number_format($p * $spp / 60, 1), '0'), '.')) ?> min</span>
       <?php endforeach; ?>
     </p>
     <label>Allowed Android app package names (one per line)
@@ -84,7 +84,7 @@
     <button class="primary">Save new configuration version</button>
   </form>
   <details><summary>Configuration history</summary>
-    <table><thead><tr><th>Version</th><th>s/pulse</th><th>Loss timeout</th><th>Sync</th><th>Apps</th><th>By</th><th>When</th></tr></thead><tbody>
+    <table><thead><tr><th>Version</th><th>s/peso</th><th>Loss timeout</th><th>Sync</th><th>Apps</th><th>By</th><th>When</th></tr></thead><tbody>
     <?php foreach ($history as $c): ?>
       <tr><td>v<?= (int) $c['version'] ?></td><td><?= (int) $c['seconds_per_pulse'] ?></td><td><?= (int) $c['local_loss_timeout_s'] ?> s</td>
           <td><?= (int) $c['controller_sync_interval_s'] ?> s</td><td><?= count(json_decode((string) $c['allowed_packages'], true) ?: []) ?></td>
@@ -96,13 +96,13 @@
 
 <section class="card">
   <h2>Coin events</h2>
-  <p class="muted small">All-time totals: <?= (int) $totals['credits'] ?> coins, <?= (int) $totals['pulses'] ?> pulses,
+  <p class="muted small">All-time totals: <?= (int) $totals['credits'] ?> coins, ₱<?= (int) $totals['pulses'] ?>,
      <?= h(hms((int) $totals['seconds'])) ?> of time sold. Retried uploads are de-duplicated by (device, boot, sequence).</p>
   <div class="scroll"><table>
-    <thead><tr><th>When</th><th>Type</th><th>Pulses</th><th>Added</th><th>Remaining after</th><th>Session</th><th>Boot / seq</th><th>Rate ver.</th></tr></thead>
+    <thead><tr><th>When</th><th>Type</th><th>Pesos</th><th>Added</th><th>Remaining after</th><th>Session</th><th>Boot / seq</th><th>Rate ver.</th></tr></thead>
     <tbody>
     <?php foreach ($events as $e): ?>
-      <tr><td><?= ts($e['occurred_at']) ?></td><td><?= h($e['event_type']) ?></td><td><?= (int) $e['pulses'] ?></td>
+      <tr><td><?= ts($e['occurred_at']) ?></td><td><?= h($e['event_type']) ?></td><td>₱<?= (int) $e['pulses'] ?></td>
           <td><?= $e['event_type'] === 'credit' ? h(intdiv((int) $e['seconds_added'], 60) . ' min') : '—' ?></td>
           <td><?= h(hms((int) $e['remaining_after'])) ?></td><td>#<?= (int) $e['session_no'] ?></td>
           <td><code><?= h($e['boot_id']) ?></code> / <?= (int) $e['seq'] ?></td><td><?= (int) $e['rate_version'] ?></td></tr>
@@ -115,12 +115,12 @@
 <section class="card">
   <h2>Session history</h2>
   <div class="scroll"><table>
-    <thead><tr><th>Started</th><th>Last coin</th><th>Ended</th><th>Coins</th><th>Pulses</th><th>Time sold</th><th>Boot / session</th></tr></thead>
+    <thead><tr><th>Started</th><th>Last coin</th><th>Ended</th><th>Coins</th><th>Pesos</th><th>Time sold</th><th>Boot / session</th></tr></thead>
     <tbody>
     <?php foreach ($sessions as $s): ?>
       <tr><td><?= ts($s['started_at']) ?></td><td><?= ts($s['last_credit_at']) ?></td>
           <td><?= $s['ended_at'] ? ts($s['ended_at']) . ' <span class="muted small">' . h($s['end_reason']) . '</span>' : '<span class="muted">open / not reported</span>' ?></td>
-          <td><?= (int) $s['credit_count'] ?></td><td><?= (int) $s['total_pulses'] ?></td><td><?= h(hms((int) $s['total_seconds'])) ?></td>
+          <td><?= (int) $s['credit_count'] ?></td><td>₱<?= (int) $s['total_pulses'] ?></td><td><?= h(hms((int) $s['total_seconds'])) ?></td>
           <td><code><?= h($s['boot_id']) ?></code> / #<?= (int) $s['session_no'] ?></td></tr>
     <?php endforeach; ?>
     <?php if (!$sessions): ?><tr><td colspan="7" class="muted">No sessions yet.</td></tr><?php endif; ?>

@@ -30,7 +30,14 @@ class PaymentScreen extends StatelessWidget {
         blocked ||
         reason == 'controller_lost' ||
         reason == 'controller_not_paired';
-    final headline = problem ? denyReasonText(reason) : 'Insert coin to start';
+    final (noticeIcon, noticeTitle, noticeColor) = blocked
+        ? (Icons.gpp_bad, 'Kiosk not provisioned', KioskPalette.danger)
+        : reason == 'controller_lost'
+        ? (Icons.portable_wifi_off, 'Coin box disconnected', KioskPalette.warn)
+        : (Icons.link_off, 'Coin box not paired', KioskPalette.warn);
+    final noticeDetail = !blocked && reason == 'controller_not_paired'
+        ? "Coins can't be accepted yet. Ask the administrator to pair the coin box with this kiosk."
+        : denyReasonText(blocked ? 'not_device_owner' : reason);
 
     final banners = <Widget>[
       if (s.recentlyExpired && !blocked)
@@ -43,57 +50,39 @@ class PaymentScreen extends StatelessWidget {
           background: KioskPalette.danger.withValues(alpha: 0.14),
           foreground: KioskPalette.danger,
         ),
-      if (blocked)
-        InfoBanner(
-          key: const Key('blocked-banner'),
-          icon: Icons.gpp_bad,
-          text: denyReasonText('not_device_owner'),
-          background: KioskPalette.danger.withValues(alpha: 0.14),
-          foreground: KioskPalette.danger,
-        ),
     ];
 
     Widget hero(Responsive r) => Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (!r.isLandscapePhone) ...[
-          Center(
-            child: problem
-                ? Icon(
-                    Icons.portable_wifi_off,
-                    size: r.coinSize * 0.8,
-                    color: KioskPalette.warn,
-                  )
-                : CoinBadge(size: r.coinSize),
+        if (problem) ...[
+          StatusNotice(
+            key: blocked ? const Key('blocked-banner') : null,
+            icon: noticeIcon,
+            title: noticeTitle,
+            detail: noticeDetail,
+            color: noticeColor,
+            large: !r.isCompact && !r.isLandscapePhone,
           ),
-          SizedBox(height: r.isCompact ? 14 : 20),
-        ],
-        Text(
-          headline,
-          key: const Key('payment-headline'),
-          textAlign: TextAlign.center,
-          style:
-              (r.isCompact || r.isLandscapePhone
-                      ? t.headlineSmall
-                      : t.displaySmall)
-                  ?.copyWith(fontWeight: FontWeight.w900, color: Colors.white),
-        ),
-        if (!problem && !r.isLandscapePhone) ...[
-          const SizedBox(height: 6),
-          Text(
-            'Drop a coin in the slot. Your time starts right away.',
-            textAlign: TextAlign.center,
-            style: (r.isCompact ? t.bodyLarge : t.titleMedium)?.copyWith(
-              color: KioskPalette.textMuted,
+        ] else ...[
+          Center(child: InsertCoinButton(large: !r.isCompact && !r.isLandscapePhone)),
+          if (!r.isLandscapePhone) ...[
+            SizedBox(height: r.isCompact ? 10 : 16),
+            Text(
+              'Drop a coin in the slot. Your time starts right away.',
+              textAlign: TextAlign.center,
+              style: (r.isCompact ? t.bodyLarge : t.titleMedium)?.copyWith(
+                color: KioskPalette.textMuted,
+              ),
             ),
-          ),
+          ],
         ],
-        SizedBox(height: r.isLandscapePhone ? 12 : 20),
+        SizedBox(height: r.isLandscapePhone ? 12 : (r.isCompact ? 20 : 28)),
         // The timer doubles as the hidden admin entry (tap it 7 times quickly).
         AdminEntry(
           onTriggered: onAdmin,
-          child: TimePill(remainingMs: s.remainingMs),
+          child: TimePill(remainingMs: s.remainingMs, large: !r.isCompact && !r.isLandscapePhone),
         ),
       ],
     );
@@ -102,7 +91,7 @@ class PaymentScreen extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        RateTable(secondsPerPulse: s.secondsPerPulse),
+        RateTable(secondsPerPulse: s.secondsPerPulse, large: !r.isCompact && !r.isLandscapePhone),
         if (s.isDemo) ...[
           const SizedBox(height: 24),
           SimulatedCoinButtons(
@@ -171,9 +160,6 @@ class PaymentScreen extends StatelessWidget {
                                 const SizedBox(height: 14),
                               ],
                               content,
-                              SizedBox(height: r.isLandscapePhone ? 12 : 28),
-                              // Local coin box and cloud status, kept small and out of the way.
-                              Center(child: ConnectionIndicators(state: s)),
                             ],
                           ),
                         ),

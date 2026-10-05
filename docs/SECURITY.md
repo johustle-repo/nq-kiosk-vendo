@@ -55,6 +55,13 @@ internet. The cloud uses `HttpsURLConnection` with the system trust store.
 * **Approved apps** can do whatever they normally do (browse the web, share,
   open their own settings). Approve only apps you are comfortable with. A web
   browser lets customers reach any website.
+* **System launcher during paid time.** Recents and the gesture-navigation
+  Home swipe are served by the stock launcher (`config_recentsComponentName`),
+  so its package is on the lock task allowlist while a session is paid (never
+  when unpaid). Normal navigation never shows its home screen, but an approved
+  app that starts it by explicit component would show the stock app drawer.
+  Lock task still blocks every unapproved app and Settings from there
+  (verified on the Android 14 emulator); Home returns to the kiosk.
 * **Vendor (HiOS) behaviour** — some OEM system dialogs or gestures may behave
   differently under lock task. This must be verified on the TECNO phone; see
   `PHYSICAL_TEST_CHECKLIST.md`.

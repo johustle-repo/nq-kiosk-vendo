@@ -92,7 +92,7 @@ final class KioskService
         $errors = [];
         $spp = filter_var($in['seconds_per_pulse'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 10, 'max_range' => 3600]]);
         if ($spp === false) {
-            $errors[] = 'Seconds per pulse must be a whole number from 10 to 3600.';
+            $errors[] = 'Seconds per peso must be a whole number from 10 to 3600.';
         }
         $loss = filter_var($in['local_loss_timeout_s'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 5, 'max_range' => 600]]);
         if ($loss === false) {

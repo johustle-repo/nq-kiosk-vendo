@@ -26,7 +26,7 @@ Future<void> openAdmin(WidgetTester tester) async {
 }
 
 void main() {
-  testWidgets('payment screen shows prompt, rates, timer and both indicators', (tester) async {
+  testWidgets('payment screen shows prompt, rates and timer, without status chips', (tester) async {
     await pumpApp(tester, snapshot());
     expect(find.text('Insert coin to start'), findsOneWidget);
     expect(find.text('00:00:00'), findsOneWidget);
@@ -36,8 +36,8 @@ void main() {
     expect(rate(5), '20 min');
     expect(rate(10), '40 min');
     expect(rate(20), '1 h 20 min');
-    expect(find.textContaining('Coin controller: connected'), findsOneWidget);
-    expect(find.textContaining('Cloud: online'), findsOneWidget);
+    expect(find.textContaining('Coin controller: connected'), findsNothing);
+    expect(find.textContaining('Cloud: online'), findsNothing);
   });
 
   testWidgets('demo mode shows a warning and labelled simulated coin buttons', (tester) async {
@@ -49,7 +49,7 @@ void main() {
     await tester.pump();
     expect(bridge.calls, contains('simulate:5'));
     expect(find.text('SIMULATED COINS · demo only'), findsOneWidget);
-    expect(find.text('+5 pulses'), findsOneWidget);
+    expect(find.text('+₱5'), findsOneWidget);
   });
 
   testWidgets('production mode has no simulated coin buttons', (tester) async {
@@ -97,21 +97,9 @@ void main() {
     expect(find.text('Time expired. Insert a coin to continue.'), findsOneWidget);
   });
 
-  testWidgets('cloud outage with local link working is shown distinctly', (tester) async {
-    await pumpApp(tester, snapshot(cloudLink: 'offline'));
-    expect(find.textContaining('Coin controller: connected'), findsOneWidget);
-    expect(find.textContaining('Cloud: offline'), findsOneWidget);
-  });
-
-  testWidgets('local controller loss shows disconnected and the paused message', (tester) async {
+  testWidgets('local controller loss shows the paused message', (tester) async {
     await pumpApp(tester, snapshot(mode: 'production', deviceOwner: true, link: 'lost', lastOkAgoMs: 45000, reason: 'controller_lost'));
-    expect(find.textContaining('Coin controller: disconnected (45 s)'), findsOneWidget);
     expect(find.textContaining('Access is paused until it reconnects'), findsOneWidget);
-  });
-
-  testWidgets('connecting state before the first report', (tester) async {
-    await pumpApp(tester, snapshot(link: 'never', lastOkAgoMs: null));
-    expect(find.textContaining('Coin controller: connecting'), findsOneWidget);
   });
 
   testWidgets('first run requires creating a PIN (no default PIN)', (tester) async {

@@ -16,6 +16,9 @@ Owner**. The app **never** resets the phone or changes ownership on its own.
   because no Google account was added. Keep the phone physically secure.
 * The Device Owner app is bound to its **signing key**. Install the same signed
   APK you will update later; changing the key requires re-provisioning.
+  Provision with the **release** APK (signed with the key in
+  `android/key.properties`), never the debug APK. Back up the keystore and
+  `key.properties`: losing them means every kiosk must be factory reset to update.
 
 ## Steps (ADB method)
 
@@ -28,7 +31,7 @@ Owner**. The app **never** resets the phone or changes ownership on its own.
 4. On the computer (Android SDK platform-tools):
    ```
    adb devices
-   adb install -r dist/vendo-kiosk-1.0.0-debug.apk
+   adb install -r dist/vendo-kiosk-1.0.0-release.apk
    adb shell dpm set-device-owner online.ebnleadgen.vendokiosk/.kiosk.KioskDeviceAdminReceiver
    ```
    Expected: `Success: Device owner set to package online.ebnleadgen.vendokiosk`.

@@ -402,6 +402,11 @@ void endSessionByAdmin() {
 // ============================================================ LCD (only changed rows are written)
 String lcdRows[LCD_ROWS];
 
+// Custom LCD character 1: the peso sign (the HD44780 ROM has none). Slot 0 is
+// avoided because a 0 byte would end the String.
+const char LCD_PESO = 1;
+const uint8_t PESO_GLYPH[8] = {0b11100, 0b11111, 0b10010, 0b11111, 0b11100, 0b10000, 0b10000, 0b00000};
+
 void lcdRow(uint8_t row, String text) {
   if (!lcd) return;
   if (text.length() > LCD_COLS) text = text.substring(0, LCD_COLS);
@@ -431,7 +436,7 @@ void updateLcd() {
     lcdRow(3, rem ? "Time: " + hms(rem) : "Open 192.168.4.1");
     return;
   }
-  lcdRow(0, rem ? "TIMER RUNNING" : "INSERT COIN");
+  lcdRow(0, rem ? "VeNdO  TIMER RUNNING" : "VeNdO  INSERT COIN");
   lcdRow(1, "Time: " + hms(rem));
   if (pairingOpen) {
     lcdRow(2, String("PAIR CODE: ") + pairingCode);
@@ -441,7 +446,8 @@ void updateLcd() {
     lcdRow(3, deviceId + (cloudState == CLOUD_OK ? " cloud" : ""));
   } else {
     lcdRow(2, "Last added: " + minutesText(lastAddedS));
-    lcdRow(3, "Last pulses: " + String(lastPulses));
+    // One accepted pulse is one peso (1, 5, 10 and 20 peso coins).
+    lcdRow(3, String("Last coin: ") + LCD_PESO + String(lastPulses));
   }
 }
 
@@ -467,6 +473,7 @@ bool initLcd() {
     lcd->init();
     Wire.setClock(100000);
     lcd->backlight();
+    lcd->createChar(1, (uint8_t *)PESO_GLYPH);
     lcd->clear();  // once, at initialization only
     Serial.printf("[lcd] found at 0x%02X\n", found);
     return true;

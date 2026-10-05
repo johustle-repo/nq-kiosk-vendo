@@ -72,8 +72,9 @@ class KioskShell extends StatelessWidget {
             screen = IdleSleep(
               key: const ValueKey('payment'),
               bridge: controller.bridge,
-              seconds: s.idleSleepS,
-              onAdmin: () => openAdmin(context),
+              // Never cover a problem (e.g. coin box not paired) with the
+              // "Insert coin" logo screen: coins would not unlock anything.
+              seconds: _paymentProblem(s) ? 0 : s.idleSleepS,
               child: PaymentScreen(
                 controller: controller,
                 onAdmin: () => openAdmin(context),
@@ -90,3 +91,8 @@ class KioskShell extends StatelessWidget {
     );
   }
 }
+
+bool _paymentProblem(KioskState s) =>
+    s.productionBlocked ||
+    s.denyReason == 'controller_lost' ||
+    s.denyReason == 'controller_not_paired';

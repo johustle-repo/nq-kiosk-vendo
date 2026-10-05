@@ -1,4 +1,6 @@
-# Vendo Kiosk
+# VeNdO Kiosk — Jo-hustle Smart Android
+
+![VeNdO logo](assets/images/vendo_logo.png)
 
 A coin-operated Android kiosk. Customers insert coins into an ESP8266-based
 coin box, get time (1 pulse = 4 minutes), and use administrator-approved apps
@@ -29,7 +31,7 @@ Contact: [jonathanquiles59@gmail.com](mailto:jonathanquiles59@gmail.com)
 | `web_backend/` | `GET /api/kiosk-status.php` for the browser demo (fits the existing live `api/` folder), token tool, simulator, tests |
 | `lib/src/web/` | Flutter web client (polling, countdown, token storage) |
 | `docs/` | Guides (below) |
-| `dist/` | Built deliverables: debug APK, firmware binaries, backend upload zip (not committed) |
+| `dist/` | Built deliverables: debug and signed release APK, firmware binaries, backend upload zip (not committed) |
 
 ## Guides
 
@@ -72,14 +74,14 @@ and enroll the phone and controller with the one-time codes.
 
 ## Rates
 
-| Pulses | Time |
+| Peso | Time |
 |---|---|
-| 1 | 4 min |
-| 5 | 20 min |
-| 10 | 40 min |
-| 20 | 80 min |
+| ₱1 | 4 min |
+| ₱5 | 20 min |
+| ₱10 | 40 min |
+| ₱20 | 80 min |
 
-Each pulse adds 240 s (configurable per kiosk in the dashboard; changes apply
+The coin acceptor sends one pulse per peso; each peso adds 240 s (configurable per kiosk in the dashboard; changes apply
 to future coins only). More coins extend the running session.
 
 ## Developer commands
@@ -89,6 +91,7 @@ flutter pub get
 flutter analyze
 flutter test
 flutter build apk --debug                       # → build/app/outputs/flutter-apk/app-debug.apk
+flutter build apk --release                     # signed with android/key.properties → app-release.apk
 cd android && ./gradlew :app:testDebugUnitTest  # Kotlin unit tests
 php backend/tests/run.php                       # backend tests (SQLite in-memory)
 php backend/tools/package.php                   # → dist/vendo-backend-*.zip for Hostinger
@@ -118,6 +121,7 @@ Never commit `.env`.
 ## Application ID
 
 `online.ebnleadgen.vendokiosk` (changed from the template's `com.example.vendo_kiosk`).
-The release build is currently signed with the debug key — create a release
-keystore before real deployment; a Device Owner app cannot switch signing keys
-without re-provisioning.
+Release builds are signed with the key referenced by `android/key.properties`
+(gitignored; the keystore lives outside the repo). The release build fails if
+that file is missing. Back up the keystore and its password: a Device Owner app
+cannot switch signing keys without re-provisioning (factory reset).

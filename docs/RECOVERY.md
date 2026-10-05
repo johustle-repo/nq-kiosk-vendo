@@ -38,7 +38,8 @@ Device Owner, in demo mode). Re-enable production from the same screen.
 
 | Symptom | Cause / fix |
 |---|---|
-| Screen is black / off | Normal: with no paid time the kiosk sleeps after the idle delay (Admin → System → Screen, default 1 min). Insert a coin to wake it; tap the dark screen 7 times for the admin PIN. Touches alone do not wake it. |
+| Kiosk shows only the logo | Normal: with no paid time the logo is shown after the idle delay (Admin → System → Screen, default 1 min; *Never* turns it off). Touch it to return to the payment screen, or insert a coin. |
+| Screen is black / off | The kiosk keeps the display on while it is in front. Check that the phone is charging (*stay awake while charging* is set in production) and that no PIN/pattern lock is set. |
 | Phone shows a lock screen after waking | Remove the PIN/pattern (Settings → Security → Screen lock → None). A swipe-only lock is dismissed automatically; production mode disables it via Device Owner. |
 | "Coin controller: not paired" | Admin → Coin controller → pair (hold FLASH 3 s for the code). |
 | "connecting…" forever | Wrong IP, phone on a different Wi-Fi/guest network with client isolation, or controller offline. Short-press FLASH to read the IP on the LCD; use a DHCP reservation. |

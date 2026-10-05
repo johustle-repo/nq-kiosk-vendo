@@ -110,7 +110,7 @@ class _LauncherScreenState extends State<LauncherScreen> {
           : TimerCard(
               remainingMs: s.remainingMs,
               label: 'Time remaining',
-              size: r.timerSize,
+              size: r.isLandscapePhone ? r.timerSize : r.timerSize * 0.72,
               footer: lowHint,
             ),
     );
@@ -142,6 +142,39 @@ class _LauncherScreenState extends State<LauncherScreen> {
                 key: const Key('no-apps'),
                 textAlign: TextAlign.center,
                 style: t.titleMedium,
+              ),
+            ),
+          ),
+        ];
+      }
+      if (!r.isCompact && !r.isLandscapePhone) {
+        const tileWidth = 148.0;
+        return [
+          SliverPadding(
+            padding: pad,
+            sliver: SliverToBoxAdapter(
+              child: Center(
+                child: ConstrainedBox(
+                  // At most 6 tiles per row so the block stays compact and centred.
+                  constraints: const BoxConstraints(maxWidth: tileWidth * 6 + 18 * 5),
+                  child: Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 18,
+                    runSpacing: 18,
+                    children: [
+                      for (final app in apps)
+                        SizedBox(
+                          width: tileWidth,
+                          height: tileWidth / 0.9,
+                          child: _AppTile(
+                            app: app,
+                            large: true,
+                            onTap: () => _launch(app),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
               ),
             ),
           ),
@@ -182,8 +215,9 @@ class _LauncherScreenState extends State<LauncherScreen> {
                 builder: (context, snap) => LayoutBuilder(
                   builder: (context, box) {
                     final r = Responsive.of(box);
-                    if (r.twoColumns) {
-                      // Tablet / landscape: timer on the left, apps on the right.
+                    if (r.isLandscapePhone) {
+                      // Landscape phone: too short for a stacked layout, so the
+                      // timer sits on the left and the apps on the right.
                       final panelWidth = r.sidePanelWidth;
                       return Row(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -192,12 +226,7 @@ class _LauncherScreenState extends State<LauncherScreen> {
                             width: panelWidth,
                             child: Center(
                               child: SingleChildScrollView(
-                                padding: EdgeInsets.fromLTRB(
-                                  r.gutter,
-                                  16,
-                                  r.gutter / 2,
-                                  16,
-                                ),
+                                padding: EdgeInsets.fromLTRB(r.gutter, 16, r.gutter / 2, 16),
                                 child: timer(r),
                               ),
                             ),
@@ -205,22 +234,45 @@ class _LauncherScreenState extends State<LauncherScreen> {
                           Expanded(
                             child: CustomScrollView(
                               slivers: [
-                                const SliverToBoxAdapter(
-                                  child: SizedBox(height: 16),
-                                ),
+                                const SliverToBoxAdapter(child: SizedBox(height: 16)),
                                 ...appSlivers(
                                   snap,
                                   r,
                                   box.maxWidth - panelWidth,
-                                  EdgeInsets.fromLTRB(
-                                    r.gutter / 2,
-                                    0,
-                                    r.gutter,
-                                    24,
-                                  ),
+                                  EdgeInsets.fromLTRB(r.gutter / 2, 0, r.gutter, 24),
                                 ),
                               ],
                             ),
+                          ),
+                        ],
+                      );
+                    }
+                    if (!r.isCompact) {
+                      // Tablet: one centred column, timer on top, apps below.
+                      return CustomScrollView(
+                        slivers: [
+                          SliverPadding(
+                            padding: EdgeInsets.fromLTRB(r.gutter, 28, r.gutter, 8),
+                            sliver: SliverToBoxAdapter(
+                              child: Center(
+                                child: ConstrainedBox(
+                                  constraints: const BoxConstraints(maxWidth: 460),
+                                  child: timer(r),
+                                ),
+                              ),
+                            ),
+                          ),
+                          SliverToBoxAdapter(
+                            child: Padding(
+                              padding: EdgeInsets.fromLTRB(r.gutter, 6, r.gutter, 28),
+                              child: _SessionLine(remainingMs: s.remainingMs),
+                            ),
+                          ),
+                          ...appSlivers(
+                            snap,
+                            r,
+                            box.maxWidth,
+                            EdgeInsets.fromLTRB(r.gutter, 0, r.gutter, 32),
                           ),
                         ],
                       );
@@ -263,19 +315,21 @@ class _AppTile extends StatelessWidget {
     required this.app,
     required this.onTap,
     this.compact = false,
+    this.large = false,
   });
 
   final InstalledApp app;
   final VoidCallback onTap;
   final bool compact;
+  final bool large;
 
   @override
   Widget build(BuildContext context) {
-    final maxIcon = compact ? 56.0 : 72.0;
+    final maxIcon = compact ? 56.0 : (large ? 68.0 : 72.0);
     return Material(
       color: KioskPalette.surface,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(large ? 26 : 22),
         side: const BorderSide(color: KioskPalette.outline),
       ),
       clipBehavior: Clip.antiAlias,
@@ -323,15 +377,36 @@ class _AppTile extends StatelessWidget {
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.w700,
-                  color: Colors.white,
-                ),
+                style: (large
+                        ? Theme.of(context).textTheme.titleMedium
+                        : Theme.of(context).textTheme.titleSmall)
+                    ?.copyWith(fontWeight: FontWeight.w700, color: Colors.white),
               ),
             ],
           ),
         ),
       ),
+    );
+  }
+}
+
+/// One quiet line under the tablet timer: when the session ends and how to add time.
+class _SessionLine extends StatelessWidget {
+  const _SessionLine({required this.remainingMs});
+
+  final int remainingMs;
+
+  @override
+  Widget build(BuildContext context) {
+    final endsAt = DateTime.now().add(Duration(milliseconds: remainingMs));
+    return Text(
+      [
+        if (remainingMs > 0) 'Session ends at ${clockText(endsAt)}',
+        'Insert a coin anytime to add time',
+      ].join('  \u00b7  '),
+      key: const Key('ends-at'),
+      textAlign: TextAlign.center,
+      style: const TextStyle(fontSize: 16, color: KioskPalette.textMuted, fontWeight: FontWeight.w600),
     );
   }
 }

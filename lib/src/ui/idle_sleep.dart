@@ -3,25 +3,23 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../bridge/kiosk_bridge.dart';
+import 'theme.dart';
 import 'widgets.dart';
 
-/// Screen saver for the payment screen: after [seconds] with no paid time and
-/// no touches the screen goes black and the backlight drops to minimum (Android
-/// may then switch the display off). Touches do NOT wake it; a coin does (the
-/// shell swaps to the launcher and the native side turns the display on).
-/// Tapping the black screen 7 times still opens the admin PIN prompt.
+/// Attract screen for the payment screen: after [seconds] with no paid time and
+/// no touches the kiosk logo is shown full screen, with the display kept on at
+/// normal brightness. A touch returns to the payment screen; a coin starts the
+/// session (the shell swaps to the launcher).
 class IdleSleep extends StatefulWidget {
   const IdleSleep({
     super.key,
     required this.bridge,
     required this.seconds,
-    required this.onAdmin,
     required this.child,
   });
 
   final KioskBridge bridge;
   final int seconds;
-  final VoidCallback onAdmin;
   final Widget child;
 
   @override
@@ -48,7 +46,6 @@ class _IdleSleepState extends State<IdleSleep> {
     _timer = Timer(Duration(seconds: widget.seconds), () {
       if (!mounted) return;
       setState(() => _asleep = true);
-      _setAwake(false);
     });
   }
 
@@ -61,26 +58,64 @@ class _IdleSleepState extends State<IdleSleep> {
   @override
   void dispose() {
     _timer?.cancel();
-    _setAwake(true); // leaving the payment screen (coin inserted / admin)
     super.dispose();
+  }
+
+  void _wake() {
+    setState(() => _asleep = false);
+    _restart();
   }
 
   @override
   Widget build(BuildContext context) {
     if (_asleep) {
-      return Scaffold(
-        key: const Key('sleep-overlay'),
-        backgroundColor: Colors.black,
-        body: AdminEntry(
-          onTriggered: widget.onAdmin,
-          child: const SizedBox.expand(),
-        ),
+      return GestureDetector(
+        key: const Key('idle-logo'),
+        behavior: HitTestBehavior.opaque,
+        onTap: _wake,
+        child: IdleLogo(onTap: _wake),
       );
     }
     return Listener(
       behavior: HitTestBehavior.translucent,
       onPointerDown: (_) => _restart(),
       child: widget.child,
+    );
+  }
+}
+
+/// Full-screen kiosk logo on the artwork's own background colour.
+class IdleLogo extends StatelessWidget {
+  const IdleLogo({super.key, required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: KioskPalette.logoBackground,
+      body: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 720),
+                  child: Image.asset(
+                    kLogoAsset,
+                    fit: BoxFit.contain,
+                    semanticLabel: 'VeNdO — Jo-hustle Smart Android',
+                  ),
+                ),
+                const SizedBox(height: 32),
+                InsertCoinButton(onPressed: onTap),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

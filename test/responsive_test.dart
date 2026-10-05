@@ -75,11 +75,13 @@ void main() {
     expect(rates.dy, greaterThan(timer.dy), reason: 'rates below the timer');
   });
 
-  testWidgets('tablet landscape launcher puts the timer beside the apps', (tester) async {
+  testWidgets('tablet launcher: timer on top, apps centred below it', (tester) async {
     await pump(tester, const Size(1280, 800), snapshot(granted: true, remainingMs: 1200000, allowed: ['com.example.app0']));
     final timer = tester.getCenter(find.byKey(const Key('countdown')));
     final app = tester.getCenter(find.text('Application number 0'));
-    expect(app.dx, greaterThan(timer.dx + 200));
+    expect(timer.dx, closeTo(640, 2), reason: 'timer centred');
+    expect(app.dy, greaterThan(timer.dy + 100), reason: 'apps below the timer');
+    expect(app.dx, closeTo(640, 2), reason: 'a single app is centred');
   });
 
   testWidgets('phone grid fits 3 apps per row; tablet at least 4', (tester) async {

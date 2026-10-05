@@ -64,7 +64,7 @@ class Responsive {
       : switch (screenClass) {
           ScreenClass.compact => 104,
           ScreenClass.medium => 140,
-          ScreenClass.expanded => 160,
+          ScreenClass.expanded => 180,
         };
 
   /// Tile width / height: shorter tiles where vertical space is scarce.

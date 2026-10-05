@@ -1,11 +1,11 @@
 {
-    "name": "vendo_kiosk",
-    "short_name": "vendo_kiosk",
+    "name": "VeNdO Kiosk",
+    "short_name": "VeNdO",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#17181A",
+    "theme_color": "#018E4E",
+    "description": "VeNdO \u2014 Jo-hustle Smart Android coin kiosk (browser demo).",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

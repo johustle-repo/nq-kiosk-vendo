@@ -1,20 +1,24 @@
 import 'package:flutter/material.dart';
 
-const kBrandSeed = Color(0xFF14B8A6); // teal
+const kBrandSeed = Color(0xFF018E4E); // VeNdO logo green
 
 /// Fixed kiosk palette (dark, high contrast, readable from a distance).
+/// Colours taken from the VeNdO logo: charcoal letters (#36383A), the green
+/// "N" (#018E4E) and its circuit highlights (#01C166), and the gold peso coin.
 class KioskPalette {
-  static const background = Color(0xFF0B1220);
-  static const surface = Color(0xFF131C2E);
-  static const surfaceHigh = Color(0xFF1B2740);
-  static const outline = Color(0xFF2A3956);
-  static const accent = Color(0xFF2DD4BF);
-  static const accentDeep = Color(0xFF0F766E);
-  static const coin = Color(0xFFFBBF24);
-  static const ok = Color(0xFF4ADE80);
+  static const background = Color(0xFF17181A);
+  static const surface = Color(0xFF222427);
+  static const surfaceHigh = Color(0xFF2D3033);
+  static const outline = Color(0xFF42464A);
+  static const accent = Color(0xFF1FC370);
+  static const accentDeep = Color(0xFF018E4E);
+  static const charcoal = Color(0xFF36383A);
+  static const logoBackground = Color(0xFFFEFEFE);
+  static const coin = Color(0xFFF2B22E);
+  static const ok = Color(0xFF34D27B);
   static const warn = Color(0xFFF59E0B);
   static const danger = Color(0xFFF87171);
-  static const textMuted = Color(0xFF94A3B8);
+  static const textMuted = Color(0xFFA4A9AE);
 }
 
 /// How urgent the remaining time is (drives the timer card colours).
@@ -42,9 +46,9 @@ ThemeData buildTheme(Brightness brightness) {
         brightness: Brightness.dark,
       ).copyWith(
         primary: KioskPalette.accent,
-        onPrimary: const Color(0xFF042F2E),
+        onPrimary: const Color(0xFF032313),
         primaryContainer: KioskPalette.accentDeep,
-        onPrimaryContainer: const Color(0xFFCCFBF1),
+        onPrimaryContainer: const Color(0xFFD2F6E2),
         surface: KioskPalette.surface,
         surfaceContainerHighest: KioskPalette.surfaceHigh,
         outline: KioskPalette.outline,
@@ -58,7 +62,7 @@ ThemeData buildTheme(Brightness brightness) {
   return base.copyWith(
     scaffoldBackgroundColor: KioskPalette.background,
     textTheme: base.textTheme.apply(
-      bodyColor: const Color(0xFFE2E8F0),
+      bodyColor: const Color(0xFFE8E9EA),
       displayColor: Colors.white,
     ),
     cardTheme: CardThemeData(

@@ -7,8 +7,10 @@ import android.content.Context
 import android.content.Intent
 import android.os.SystemClock
 import android.util.Log
+import online.ebnleadgen.vendokiosk.MainActivity
 import online.ebnleadgen.vendokiosk.core.KioskMode
 import online.ebnleadgen.vendokiosk.data.KioskStore
+import online.ebnleadgen.vendokiosk.service.KioskEngine
 import online.ebnleadgen.vendokiosk.service.KioskService
 
 /**
@@ -22,12 +24,30 @@ class BootReceiver : BroadcastReceiver() {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED && intent.action != Intent.ACTION_MY_PACKAGE_REPLACED) return
         val store = KioskStore(context)
         if (store.mode == KioskMode.PRODUCTION) {
-            val ok = KioskPolicy(context).setPaidAccess(null)
+            // Through the engine, not KioskPolicy directly: as the home app the kiosk
+            // often starts (and may already have granted a verified session) before
+            // BOOT_COMPLETED arrives.
+            val ok = KioskEngine.get(context).restrictToKiosk()
             Log.i(KioskDeviceAdminReceiver.TAG, "Boot: restricted to kiosk (deviceOwner=$ok)")
         }
         if (store.mode != KioskMode.UNCONFIGURED) {
             // BOOT_COMPLETED is an allowed context for starting a foreground service.
             KioskService.start(context)
+        }
+        if (store.mode == KioskMode.PRODUCTION) {
+            // An app update kills the running kiosk (ending lock task) and Android then
+            // resumes whatever was below it, e.g. the stock launcher. Bring the kiosk
+            // back; it re-enters lock task in onResume. Device Owner apps may start
+            // activities from the background.
+            try {
+                context.startActivity(
+                    Intent(context, MainActivity::class.java).addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                    )
+                )
+            } catch (e: Exception) {
+                Log.w(KioskDeviceAdminReceiver.TAG, "Could not reopen kiosk after ${intent.action}: ${e.message}")
+            }
         }
     }
 }
@@ -70,7 +90,7 @@ class WatchdogReceiver : BroadcastReceiver() {
         if (store.mode != KioskMode.PRODUCTION) return
         if (!KioskService.isAliveRecently()) {
             Log.w(KioskDeviceAdminReceiver.TAG, "Watchdog: service not running; restricting and restarting")
-            KioskPolicy(context).setPaidAccess(null)
+            KioskEngine.get(context).restrictToKiosk()
             try {
                 KioskService.start(context)
             } catch (e: Exception) {

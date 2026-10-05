@@ -2,131 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../model/kiosk_state.dart';
 import '../model/rates.dart';
 import 'theme.dart';
-
-/// Two independent indicators: the LOCAL coin controller (decides access)
-/// and the CLOUD dashboard (reporting only).
-class ConnectionIndicators extends StatelessWidget {
-  const ConnectionIndicators({super.key, required this.state});
-
-  final KioskState state;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final (ctlText, ctlColor, ctlIcon) = _controller(scheme);
-    final (cloudText, cloudColor, cloudIcon) = _cloud(scheme);
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: [
-        _Chip(
-          key: const Key('indicator-controller'),
-          icon: ctlIcon,
-          label: 'Coin controller: $ctlText',
-          color: ctlColor,
-        ),
-        _Chip(
-          key: const Key('indicator-cloud'),
-          icon: cloudIcon,
-          label: 'Cloud: $cloudText',
-          color: cloudColor,
-        ),
-      ],
-    );
-  }
-
-  (String, Color, IconData) _controller(ColorScheme s) {
-    if (!state.controllerPaired) {
-      return (
-        'not paired',
-        state.isDemo ? KioskPalette.textMuted : KioskPalette.danger,
-        Icons.link_off,
-      );
-    }
-    final age = state.controllerLastOkAgoMs;
-    return switch (state.controllerLink) {
-      ControllerLink.connected => ('connected', KioskPalette.ok, Icons.sensors),
-      ControllerLink.degraded => (
-        'reconnecting${age != null ? ' (${age ~/ 1000} s)' : ''}',
-        KioskPalette.warn,
-        Icons.sync_problem,
-      ),
-      ControllerLink.lost => (
-        'disconnected${age != null ? ' (${age ~/ 1000} s)' : ''}',
-        KioskPalette.danger,
-        Icons.sensors_off,
-      ),
-      ControllerLink.never => ('connecting…', KioskPalette.warn, Icons.sync),
-    };
-  }
-
-  (String, Color, IconData) _cloud(ColorScheme s) => switch (state.cloudLink) {
-    CloudLink.ok => ('online', KioskPalette.ok, Icons.cloud_done),
-    CloudLink.offline => ('offline', KioskPalette.warn, Icons.cloud_off),
-    CloudLink.unauthorized => (
-      'credential revoked',
-      KioskPalette.danger,
-      Icons.cloud_off,
-    ),
-    CloudLink.error => ('error', KioskPalette.warn, Icons.cloud_off),
-    CloudLink.disabled => (
-      'not enrolled',
-      KioskPalette.textMuted,
-      Icons.cloud_outlined,
-    ),
-  };
-}
-
-class _Chip extends StatelessWidget {
-  const _Chip({
-    super.key,
-    required this.icon,
-    required this.label,
-    required this.color,
-  });
-
-  final IconData icon;
-  final String label;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: color.withValues(alpha: 0.45)),
-        color: color.withValues(alpha: 0.12),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 8,
-            height: 8,
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 8),
-          Icon(icon, size: 16, color: color),
-          const SizedBox(width: 6),
-          Flexible(
-            child: Text(
-              label,
-              style: TextStyle(
-                color: color,
-                fontWeight: FontWeight.w700,
-                fontSize: 13,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 /// The big remaining-time card. Turns amber at ≤5 min and red at ≤1 min.
 class TimerCard extends StatelessWidget {
@@ -271,36 +148,67 @@ class TimerBar extends StatelessWidget {
   }
 }
 
-/// Round coin badge used as the payment hero.
-class CoinBadge extends StatelessWidget {
-  const CoinBadge({super.key, this.size = 96});
+/// Small "Insert coin to start" call to action. Only a real coin starts a
+/// session, so tapping it just explains what to do (or wakes the idle screen).
+class InsertCoinButton extends StatelessWidget {
+  const InsertCoinButton({super.key, this.onPressed, this.large = false});
 
-  final double size;
+  final VoidCallback? onPressed;
+  final bool large;
 
   @override
-  Widget build(BuildContext context) => Container(
-    width: size,
-    height: size,
-    decoration: BoxDecoration(
-      shape: BoxShape.circle,
-      gradient: const RadialGradient(
-        colors: [Color(0xFFFDE68A), KioskPalette.coin, Color(0xFFB45309)],
-        stops: [0.0, 0.6, 1.0],
-      ),
-      boxShadow: [
-        BoxShadow(
-          color: KioskPalette.coin.withValues(alpha: 0.35),
-          blurRadius: 32,
-          spreadRadius: 2,
-        ),
-      ],
+  Widget build(BuildContext context) => FilledButton(
+    key: const Key('insert-coin-button'),
+    onPressed: onPressed ??
+        () => ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            const SnackBar(
+              content: Text('Drop a coin in the slot. Your time starts right away.'),
+              duration: Duration(seconds: 3),
+            ),
+          ),
+    style: FilledButton.styleFrom(
+      backgroundColor: KioskPalette.accentDeep,
+      foregroundColor: Colors.white,
+      minimumSize: Size(0, large ? 56 : 40),
+      padding: EdgeInsets.symmetric(horizontal: large ? 34 : 22, vertical: large ? 14 : 10),
+      textStyle: TextStyle(fontSize: large ? 21 : 16, fontWeight: FontWeight.w700),
+      shape: const StadiumBorder(),
     ),
-    child: Icon(
-      Icons.payments_rounded,
-      size: size * 0.5,
-      color: const Color(0xFF78350F),
-    ),
+    child: const Text('Insert coin to start'),
   );
+}
+
+const kLogoAsset = 'assets/images/vendo_logo.png';
+const kCoinAsset = 'assets/images/vendo_coin.png';
+
+/// The VeNdO wordmark on its own light plate (the artwork is dark-on-white, so
+/// it needs the plate to read on the charcoal kiosk background).
+class BrandLogo extends StatelessWidget {
+  const BrandLogo({super.key, this.height = 56, this.plate = true});
+
+  final double height;
+  final bool plate;
+
+  @override
+  Widget build(BuildContext context) {
+    final image = Image.asset(
+      kLogoAsset,
+      height: height,
+      fit: BoxFit.contain,
+      semanticLabel: 'VeNdO — Jo-hustle Smart Android',
+    );
+    if (!plate) return image;
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: height * 0.22, vertical: height * 0.1),
+      decoration: BoxDecoration(
+        color: KioskPalette.logoBackground,
+        borderRadius: BorderRadius.circular(height * 0.25),
+      ),
+      child: image,
+    );
+  }
 }
 
 class CountdownText extends StatelessWidget {
@@ -420,116 +328,97 @@ class InfoBanner extends StatelessWidget {
   );
 }
 
-/// Rates as one clean card: a row per coin, value on the right.
+/// Rates as one clean card: a row per coin, value on the right. [large] is
+/// for tablets, where the default sizes read too small from a distance.
 class RateTable extends StatelessWidget {
-  const RateTable({super.key, required this.secondsPerPulse});
+  const RateTable({super.key, required this.secondsPerPulse, this.large = false});
 
   final int secondsPerPulse;
+  final bool large;
 
   @override
   Widget build(BuildContext context) {
-    final t = Theme.of(context).textTheme;
+    final badge = large ? 44.0 : 32.0;
+    final label = large ? 20.0 : 16.0;
+    final value = large ? 24.0 : 17.0;
     return Container(
       decoration: BoxDecoration(
         color: KioskPalette.surface,
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(large ? 28 : 22),
         border: Border.all(color: KioskPalette.outline),
       ),
-      padding: const EdgeInsets.fromLTRB(18, 14, 18, 14),
+      padding: EdgeInsets.fromLTRB(large ? 28 : 18, large ? 22 : 14, large ? 28 : 18, large ? 20 : 14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
-              const Icon(
-                Icons.sell_outlined,
-                size: 18,
-                color: KioskPalette.coin,
-              ),
-              const SizedBox(width: 8),
+              Icon(Icons.sell_outlined, size: large ? 24 : 18, color: KioskPalette.coin),
+              SizedBox(width: large ? 10 : 8),
               Text(
                 'Rates',
-                style: t.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w800,
-                  color: Colors.white,
-                ),
+                style: TextStyle(fontSize: large ? 22 : 17, fontWeight: FontWeight.w800, color: Colors.white),
               ),
             ],
           ),
-          const SizedBox(height: 6),
+          SizedBox(height: large ? 10 : 6),
           for (var i = 0; i < Rates.displayPulses.length; i++)
             Container(
-              padding: const EdgeInsets.symmetric(vertical: 11),
+              padding: EdgeInsets.symmetric(vertical: large ? 16 : 11),
               decoration: BoxDecoration(
                 border: i == 0
                     ? null
-                    : const Border(
-                        top: BorderSide(
-                          color: KioskPalette.outline,
-                          width: 0.6,
-                        ),
-                      ),
+                    : const Border(top: BorderSide(color: KioskPalette.outline, width: 0.6)),
               ),
               child: Row(
                 children: [
                   Container(
-                    width: 30,
-                    height: 30,
+                    width: badge,
+                    height: badge,
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: KioskPalette.coin.withValues(alpha: 0.15),
+                      border: Border.all(color: KioskPalette.coin.withValues(alpha: 0.35)),
                     ),
                     child: Text(
                       '${Rates.displayPulses[i]}',
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: KioskPalette.coin,
                         fontWeight: FontWeight.w800,
-                        fontSize: 13,
+                        fontSize: badge * 0.4,
                       ),
                     ),
                   ),
-                  const SizedBox(width: 12),
+                  SizedBox(width: large ? 16 : 12),
                   Expanded(
                     child: Text(
-                      'pulse${Rates.displayPulses[i] == 1 ? '' : 's'}',
-                      style: t.bodyLarge?.copyWith(
-                        color: KioskPalette.textMuted,
-                      ),
+                      'peso${Rates.displayPulses[i] == 1 ? '' : 's'}',
+                      style: TextStyle(fontSize: label, color: KioskPalette.textMuted),
                     ),
                   ),
                   FittedBox(
                     fit: BoxFit.scaleDown,
                     child: Text(
                       Rates.describeDuration(
-                        Rates.secondsFor(
-                          Rates.displayPulses[i],
-                          secondsPerPulse: secondsPerPulse,
-                        ),
+                        Rates.secondsFor(Rates.displayPulses[i], secondsPerPulse: secondsPerPulse),
                       ),
                       key: Key('rate-${Rates.displayPulses[i]}'),
-                      style: t.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w800,
-                        color: Colors.white,
-                      ),
+                      style: TextStyle(fontSize: value, fontWeight: FontWeight.w800, color: Colors.white),
                     ),
                   ),
                 ],
               ),
             ),
-          const SizedBox(height: 4),
+          SizedBox(height: large ? 8 : 4),
           Row(
             children: [
-              const Icon(
-                Icons.add_circle_outline,
-                size: 16,
-                color: KioskPalette.accent,
-              ),
+              Icon(Icons.add_circle_outline, size: large ? 20 : 16, color: KioskPalette.accent),
               const SizedBox(width: 6),
               Flexible(
                 child: Text(
                   'Additional coins extend your time.',
-                  style: t.bodySmall?.copyWith(color: KioskPalette.textMuted),
+                  style: TextStyle(fontSize: large ? 16 : 13, color: KioskPalette.textMuted),
                 ),
               ),
             ],
@@ -540,11 +429,18 @@ class RateTable extends StatelessWidget {
   }
 }
 
-/// Compact remaining-time display for the payment screen.
+/// 12-hour clock text, e.g. "1:42 PM".
+String clockText(DateTime t) {
+  final h = t.hour % 12 == 0 ? 12 : t.hour % 12;
+  return '$h:${t.minute.toString().padLeft(2, '0')} ${t.hour < 12 ? 'AM' : 'PM'}';
+}
+
+/// Compact remaining-time display for the payment screen ([large] on tablets).
 class TimePill extends StatelessWidget {
-  const TimePill({super.key, required this.remainingMs});
+  const TimePill({super.key, required this.remainingMs, this.large = false});
 
   final int remainingMs;
+  final bool large;
 
   @override
   Widget build(BuildContext context) {
@@ -553,36 +449,92 @@ class TimePill extends StatelessWidget {
         : KioskPalette.textMuted;
     return Center(
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        padding: EdgeInsets.symmetric(horizontal: large ? 32 : 20, vertical: large ? 16 : 10),
         decoration: BoxDecoration(
           color: KioskPalette.surface,
-          borderRadius: BorderRadius.circular(40),
+          borderRadius: BorderRadius.circular(60),
           border: Border.all(color: color.withValues(alpha: 0.5)),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.timer_outlined, size: 20, color: color),
-            const SizedBox(width: 10),
+            Icon(Icons.timer_outlined, size: large ? 30 : 20, color: color),
+            SizedBox(width: large ? 14 : 10),
             Text(
               'TIME',
               style: TextStyle(
                 color: color,
                 fontWeight: FontWeight.w800,
                 letterSpacing: 1.4,
-                fontSize: 13,
+                fontSize: large ? 17 : 13,
               ),
             ),
-            const SizedBox(width: 12),
+            SizedBox(width: large ? 18 : 12),
             Flexible(
               child: CountdownText(
                 remainingMs: remainingMs,
-                size: 30,
+                size: large ? 52 : 30,
                 color: remainingMs > 0 ? color : null,
               ),
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Why the kiosk cannot take coins right now: a calm card with a short title
+/// and the full explanation, instead of a wall of headline text.
+class StatusNotice extends StatelessWidget {
+  const StatusNotice({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.detail,
+    this.color = KioskPalette.warn,
+    this.large = false,
+  });
+
+  final IconData icon;
+  final String title;
+  final String detail;
+  final Color color;
+  final bool large;
+
+  @override
+  Widget build(BuildContext context) {
+    final iconBox = large ? 88.0 : 64.0;
+    return Container(
+      padding: EdgeInsets.all(large ? 32 : 20),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(large ? 28 : 22),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: iconBox,
+            height: iconBox,
+            decoration: BoxDecoration(shape: BoxShape.circle, color: color.withValues(alpha: 0.16)),
+            child: Icon(icon, size: iconBox * 0.52, color: color),
+          ),
+          SizedBox(height: large ? 20 : 14),
+          Text(
+            title,
+            key: const Key('payment-headline'),
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: large ? 34 : 24, fontWeight: FontWeight.w900, color: Colors.white),
+          ),
+          SizedBox(height: large ? 10 : 6),
+          Text(
+            detail,
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: large ? 19 : 15, height: 1.35, color: KioskPalette.textMuted),
+          ),
+        ],
       ),
     );
   }
@@ -721,7 +673,7 @@ class SimulatedCoinButtons extends StatelessWidget {
                             FittedBox(
                               fit: BoxFit.scaleDown,
                               child: Text(
-                                '+$p pulse${p == 1 ? '' : 's'}',
+                                '+₱$p',
                                 style: const TextStyle(
                                   fontWeight: FontWeight.w800,
                                 ),

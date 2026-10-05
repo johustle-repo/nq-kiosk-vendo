@@ -1,5 +1,6 @@
 <?php use function Vendo\Web\{h, csrf_field}; ?>
 <section class="card narrow">
+  <img class="login-logo" src="/assets/logo.png" alt="VeNdO — Jo-hustle Smart Android" width="280" height="105">
   <h1>Administrator sign in</h1>
   <form method="post" action="/login" autocomplete="on">
     <?= csrf_field($csrf) ?>

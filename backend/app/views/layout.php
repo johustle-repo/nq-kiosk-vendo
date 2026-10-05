@@ -5,13 +5,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title><?= h($title ?? 'Vendo Kiosk') ?> · Vendo Kiosk</title>
+<title><?= h($title ?? 'VeNdO Kiosk') ?> · VeNdO Kiosk</title>
+<link rel="icon" type="image/png" href="/assets/favicon.png">
+<meta name="theme-color" content="#018E4E">
 <link rel="stylesheet" href="/assets/app.css">
 <script src="/assets/app.js" defer></script>
 </head>
 <body>
 <header class="topbar">
-  <a class="brand" href="/">Vendo Kiosk <span class="muted">admin</span></a>
+  <a class="brand" href="/"><img src="/assets/logo.png" alt="VeNdO — Jo-hustle Smart Android" width="97" height="36"> <span class="muted">admin</span></a>
   <?php if (!empty($admin)): ?>
   <nav>
     <a href="/">Kiosks</a>

@@ -133,6 +133,10 @@ class KioskPolicy(private val context: Context) {
         val allowed = buildList {
             add(pkg)
             packages?.filter { it != pkg && isInstalled(it) }?.let { addAll(it) }
+            // The Recents button and the gesture-navigation Home swipe are served by
+            // the system launcher's recents activity even though this app is Home.
+            // Without it on the allowlist both land on "App is not available".
+            if (packages != null) recentsProviderPackage()?.let { add(it) }
         }.distinct()
         dpm.setLockTaskPackages(admin, allowed.toTypedArray())
         var features = DevicePolicyManager.LOCK_TASK_FEATURE_HOME or DevicePolicyManager.LOCK_TASK_FEATURE_SYSTEM_INFO
@@ -142,6 +146,19 @@ class KioskPolicy(private val context: Context) {
         if (Build.VERSION.SDK_INT >= 30) features = features or DevicePolicyManager.LOCK_TASK_FEATURE_BLOCK_ACTIVITY_START_IN_TASK
         dpm.setLockTaskFeatures(admin, features)
         return true
+    }
+
+    /**
+     * Package of the platform's recents component (config_recentsComponentName,
+     * e.g. Pixel/AOSP Launcher3 Quickstep or the HiOS launcher). Never the
+     * Settings app, so allowlisting it cannot open Settings.
+     */
+    private fun recentsProviderPackage(): String? {
+        val id = context.resources.getIdentifier("config_recentsComponentName", "string", "android")
+        if (id == 0) return null
+        val recents = ComponentName.unflattenFromString(context.resources.getString(id))?.packageName ?: return null
+        val settings = context.packageManager.resolveActivity(Intent(Settings.ACTION_SETTINGS), 0)?.activityInfo?.packageName
+        return recents.takeIf { it != pkg && it != settings && isInstalled(it) }
     }
 
     private fun isInstalled(p: String) = try {

@@ -85,16 +85,17 @@ The interrupt handler (`onCoinEdge`, `IRAM_ATTR`) only timestamps edges and
 validates the pulse width; grouping, crediting, LCD, flash and networking all
 happen in `loop()`.
 
-Rates: 1 pulse = 4 min, 5 = 20 min, 10 = 40 min, 20 = 80 min. Coins during a
-session extend it.
+Rates: ₱1 (1 pulse) = 4 min, ₱5 = 20 min, ₱10 = 40 min, ₱20 = 80 min — the coin
+acceptor is set to one pulse per peso, and the kiosk UI and LCD say "peso".
+Coins during a session extend it.
 
 ## LCD
 
 ```
-INSERT COIN          ← or TIMER RUNNING
+VeNdO  INSERT COIN   ← or VeNdO  TIMER RUNNING
 Time: 00:19:42
 Last added: 20 min
-Last pulses: 5
+Last coin: ₱5        ← ₱ is a custom LCD character
 ```
 
 Only changed rows are rewritten; the screen is cleared once at start-up.

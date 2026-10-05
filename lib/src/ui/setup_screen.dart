@@ -89,6 +89,8 @@ class _SetupScreenState extends State<SetupScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  const Center(child: BrandLogo(height: 56)),
+                  const SizedBox(height: 20),
                   Text(
                     'Vendo Kiosk setup',
                     style: t.headlineMedium?.copyWith(

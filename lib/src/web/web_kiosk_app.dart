@@ -38,7 +38,7 @@ class WebKioskApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-    title: 'Vendo Kiosk (browser demo)',
+    title: 'VeNdO Kiosk (browser demo)',
     debugShowCheckedModeBanner: false,
     theme: buildTheme(Brightness.light),
     darkTheme: buildTheme(Brightness.dark),
@@ -102,6 +102,10 @@ class _WebKioskHomeState extends State<WebKioskHome> {
         child: Column(
           children: [
             const _BrowserDemoBanner(),
+            const Padding(
+              padding: EdgeInsets.only(top: 16),
+              child: Center(child: BrandLogo(height: 48)),
+            ),
             Expanded(
               child: token == null
                   ? _TokenScreen(
@@ -324,7 +328,7 @@ class _WebStatusScreenState extends State<WebStatusScreen> {
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
         SnackBar(
           content: Text(
-            'Coin received: +${Rates.describeDuration(Rates.secondsFor(pulses))} ($pulses pulse${pulses == 1 ? '' : 's'})',
+            'Coin received: +${Rates.describeDuration(Rates.secondsFor(pulses))} (₱$pulses)',
           ),
           duration: const Duration(seconds: 3),
         ),

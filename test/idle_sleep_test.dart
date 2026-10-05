@@ -17,27 +17,31 @@ Future<FakeKioskBridge> pump(WidgetTester tester, Map<Object?, Object?> state) a
 }
 
 void main() {
-  testWidgets('idle payment screen goes dark; touches do not wake it; a coin does', (tester) async {
+  testWidgets('idle payment screen shows the logo with the screen on; a touch returns; a coin starts', (tester) async {
     final bridge = await pump(tester, snapshot(allowed: ['com.example.video']));
     expect(bridge.calls, contains('awake:true'));
     await tester.pump(const Duration(seconds: 59));
-    expect(find.byKey(const Key('sleep-overlay')), findsNothing);
+    expect(find.byKey(const Key('idle-logo')), findsNothing);
     await tester.pump(const Duration(seconds: 2));
-    expect(find.byKey(const Key('sleep-overlay')), findsOneWidget);
-    expect(bridge.calls.last, 'awake:false');
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('idle-logo')), findsOneWidget);
+    expect(find.image(const AssetImage('assets/images/vendo_logo.png')), findsOneWidget);
+    expect(bridge.calls, isNot(contains('awake:false')));
 
-    // A single touch keeps it dark.
-    await tester.tap(find.byKey(const Key('sleep-overlay')));
-    await tester.pump();
-    expect(find.byKey(const Key('sleep-overlay')), findsOneWidget);
+    // A touch returns to the payment screen, and the idle timer starts over.
+    await tester.tap(find.byKey(const Key('idle-logo')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('idle-logo')), findsNothing);
+    expect(find.text('Insert coin to start'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 61));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('idle-logo')), findsOneWidget);
 
-    // Coin inserted: the paid screen appears and the screen is turned back on.
-    bridge.calls.clear();
+    // Coin inserted: the paid screen appears.
     bridge.push(snapshot(granted: true, remainingMs: 240000, allowed: ['com.example.video']));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('sleep-overlay')), findsNothing);
+    expect(find.byKey(const Key('idle-logo')), findsNothing);
     expect(find.text('Video'), findsOneWidget);
-    expect(bridge.calls, contains('awake:true'));
   });
 
   testWidgets('touches before the timeout keep the screen awake', (tester) async {
@@ -47,14 +51,17 @@ void main() {
       await tester.tap(find.text('Insert coin to start'));
     }
     await tester.pump(const Duration(seconds: 40));
-    expect(find.byKey(const Key('sleep-overlay')), findsNothing);
+    expect(find.byKey(const Key('idle-logo')), findsNothing);
     await tester.pump(const Duration(seconds: 25));
-    expect(find.byKey(const Key('sleep-overlay')), findsOneWidget);
+    expect(find.byKey(const Key('idle-logo')), findsOneWidget);
   });
 
-  testWidgets('7 taps on the dark screen open the admin PIN prompt', (tester) async {
+  testWidgets('admin entry still works after leaving the logo screen', (tester) async {
     await pump(tester, snapshot());
     await tester.pump(const Duration(seconds: 61));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('idle-logo')));
+    await tester.pumpAndSettle();
     for (var i = 0; i < 7; i++) {
       await tester.tap(find.byKey(const Key('admin-entry')));
       await tester.pump(const Duration(milliseconds: 150));
@@ -63,13 +70,21 @@ void main() {
     expect(find.text('Administrator PIN'), findsOneWidget);
   });
 
-  testWidgets('sleep can be turned off', (tester) async {
-    await pump(tester, snapshot(idleSleepS: 0));
-    await tester.pump(const Duration(minutes: 10));
-    expect(find.byKey(const Key('sleep-overlay')), findsNothing);
+  testWidgets('no logo screen while the coin box is not paired', (tester) async {
+    await pump(tester, snapshot(mode: 'production', deviceOwner: true, reason: 'controller_not_paired'));
+    await tester.pump(const Duration(minutes: 5));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('idle-logo')), findsNothing);
+    expect(find.text('Coin box not paired'), findsOneWidget);
   });
 
-  testWidgets('admin can change the sleep delay', (tester) async {
+  testWidgets('the logo screen can be turned off', (tester) async {
+    await pump(tester, snapshot(idleSleepS: 0));
+    await tester.pump(const Duration(minutes: 10));
+    expect(find.byKey(const Key('idle-logo')), findsNothing);
+  });
+
+  testWidgets('admin can change the logo delay', (tester) async {
     final bridge = await pump(tester, snapshot(unlocked: true));
     for (var i = 0; i < 7; i++) {
       await tester.tap(find.byKey(const Key('admin-entry')));
