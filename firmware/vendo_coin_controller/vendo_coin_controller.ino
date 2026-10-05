@@ -1380,6 +1380,7 @@ void openPairingWindow() {
 //   pair                      → open the tablet pairing window and print the code
 //   status                    → print every tablet's time, selection and held coins
 //   select=N                  → next coins go to tablet N (0 = hold)
+//   enroll=XXXXX-XXXXX        → enroll with a one-time coin box code from the dashboard
 //   status_token=<token>      status_device_id=<id>      status_url=https://...
 // Values are saved to flash; the token is never printed back.
 void serialConfigLoop() {
@@ -1411,6 +1412,14 @@ void serialConfigLoop() {
       }
     } else if (key == "select") {
       setSelection(value.toInt(), SELECTION_TTL_S);
+    } else if (key == "enroll" && value.length() >= 10 && value.length() <= 16) {
+      // Same as the setup portal's enrollment field: a one-time coin box code from the dashboard.
+      settings.enrollCode = value;
+      settings.cloudToken = "";  // re-enrollment replaces the old credential
+      saveSettings();
+      cloudState = CLOUD_DISABLED;
+      nextSyncMs = 0;
+      Serial.println("[config] enrollment code saved; enrolling on the next cloud sync");
     } else if (key == "status_token" && value.length() >= 16) {
       settings.statusToken = value;
       changed = true;
