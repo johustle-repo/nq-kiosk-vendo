@@ -8,7 +8,8 @@
 | Customer keeps using an app after time runs out | Native foreground service revokes the allowlist at expiry; Android closes the app's task. Watchdog + fail-closed `onDestroy`. |
 | Fake "coin controller" on the Wi-Fi grants time | Status replies are HMAC-SHA256 signed with a 32-byte key shared at pairing, bound to a fresh 128-bit nonce, the paired device id and a monotonic uptime. |
 | Replaying old controller replies | Nonce must match the request; uptime must increase within a boot. |
-| Network request that adds time | None exists. Only accepted coin pulses add time. The cloud never sends time. |
+| Network request that adds time | No LAN endpoint adds time. The dashboard can add free time or give held coins to a tablet: these are commands only a signed-in administrator can issue for their own site, delivered to the coin box over verified HTTPS on its own token, applied once per id, and written to the audit log (who, which tablet, how long). Limit 4 h per command. Protect dashboard passwords accordingly. |
+| One tablet reading or spoofing another's time | Each tablet has its own pairing key; signatures cover the tablet number, and a response for another tablet is rejected. |
 | Simulated coins on a production kiosk | Rejected natively, buttons hidden. |
 | Stale cloud/phone data granting access | Phone never persists remaining time; boot restricts first; cloud status is not an input to access decisions. |
 | Stolen device credential | Per-device tokens, hashed at rest, revocable; type-bound (phone vs controller); ownership enforced on every call. |

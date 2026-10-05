@@ -174,3 +174,8 @@ it('returns the device type mismatch as unauthorized, not as data', function () 
     deviceCall($t, 'controller/sync', syncBody())->assertUnauthorized()->assertJsonPath('ok', false);
     expect(Device::count())->toBe(1);
 });
+
+it('accepts the X-Device-Token header when Authorization is stripped', function () {
+    [, $t] = enrollDevice(site(), 'controller');
+    $this->withHeader('X-Device-Token', $t)->postJson('/api/v1/controller/poll', ['boot_id' => 'a1b2c3d4'])->assertOk();
+});

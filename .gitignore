@@ -46,7 +46,6 @@ app.*.map.json
 
 # Vendo Kiosk — secrets and generated deliverables
 .env
-backend/app/.env
 *.sqlite
 /dist/
 web_backend/vendo_web/config.php

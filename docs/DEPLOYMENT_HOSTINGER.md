@@ -1,160 +1,143 @@
-# Deploying the backend and dashboard on Hostinger
+# Deploying the dashboard on Hostinger
 
 Target: `https://vendo-kiosk.ebnleadgen.online/`
+
+The dashboard and device API are a **Laravel 13** app in `dashboard/` (PHP 8.3+,
+MySQL). It replaces the earlier plain-PHP backend, which was never deployed.
 
 ## What was verified about the hosting (2026-10-04, read-only checks)
 
 * `vendo-kiosk.ebnleadgen.online` is served by Hostinger (`platform: hostinger`,
-  `panel: hpanel`, CDN `hcdn`) with **PHP 8.4.19**; it currently shows the
-  Hostinger **default page** and `/api/v1/health` returns 404 — nothing is
-  deployed there yet.
+  `panel: hpanel`, CDN `hcdn`) with **PHP 8.4.19**. The Composer dependencies are
+  pinned to that version (`config.platform.php`).
 * HTTPS works with a valid Let's Encrypt certificate (TLS 1.2 and 1.3).
-* The parent domain runs a separate PHP (Laravel) site — do **not** touch it.
-* Not verified (needs your hPanel): plan type, SSH availability, Node.js, cron.
+* The subdomain already serves **`api/status.php`** (the coin box uploads to it)
+  and may serve the browser demo (`docs/WEB_KIOSK.md`). The package does not
+  overwrite those files, and Laravel's `.htaccess` serves existing files first,
+  so `/api/status.php` and `/api/kiosk-status.php` keep working.
+* The parent domain runs a separate Laravel site — do **not** touch it.
+* Not verified (needs your hPanel): SSH availability, cron.
 
-Because of that, the backend is **plain PHP 8.1+ with MySQL and no Composer
-dependencies**. It needs no SSH, Node.js, WebSockets or long-running processes;
-devices use short outbound HTTPS requests (polling).
+No SSH, Node.js, queue worker or cron is required on the server: assets are
+built on your PC, and devices use short outbound HTTPS requests.
 
 ## Folder layout on the server
 
-Hostinger subdomains usually get their own document root, for example:
-
-```
-/home/<user>/domains/vendo-kiosk.ebnleadgen.online/public_html   ← document root
-```
-
-(Check yours in hPanel → Websites → Dashboard → File manager, or
-Domains → Subdomains, which shows the folder of each subdomain.)
-
-Upload the package so that `vendo_app` is a **sibling** of `public_html`
-(outside the web root):
-
 ```
 domains/vendo-kiosk.ebnleadgen.online/
-├── public_html/        ← from the zip's public_html/ (index.php, .htaccess, assets/)
-└── vendo_app/          ← from the zip's vendo_app/ (code, migrations, .env)
+├── public_html/         ← document root: index.php, .htaccess, build/, images/
+│   └── api/status.php   ← existing files stay where they are
+└── vendo_dashboard/     ← the Laravel app (code, vendor, storage, .env) — OUTSIDE the web root
 ```
 
-If your subdomain's document root is a folder inside the main site
-(e.g. `domains/ebnleadgen.online/public_html/vendo-kiosk`), put `vendo_app`
-next to that folder and adjust the first path in `public_html/index.php`
-(`$candidates`). Never place `.env` inside a public folder.
+`public_html/index.php` loads `../vendo_dashboard`. If your document root is
+elsewhere, keep `vendo_dashboard` as its sibling or edit the `$base` line in
+`index.php`. Never put `.env` in a public folder.
 
-## Step by step (no SSH needed)
+## Step by step
 
 ### 0. Back up / inspect first
-* hPanel → File manager: confirm the subdomain's `public_html` only contains the
-  Hostinger default `index.html`/`default.php` (that is what the site serves now).
-  Download a copy of anything else before replacing it.
-* If you reuse an existing database, export it first (phpMyAdmin → Export).
-  The migration only **creates** new tables, but review it before running.
+* File manager → download `public_html` as it is now (it contains `api/`).
+* If `public_html` has an `index.html` (Hostinger default page or the Flutter
+  browser demo), decide where it should live: it would shadow the dashboard at
+  `/`. Move the demo into a subfolder (e.g. `public_html/demo/`) or delete the
+  default page.
 
 ### 1. Build the package (on your PC)
 ```
-php backend/tools/package.php
+cd dashboard
+npm ci && npm run build
+php tools/package.php
 ```
-→ `dist/vendo-backend-1.0.0-<timestamp>.zip` (contains no secrets).
+→ `dist/vendo-dashboard-2.0.0-<timestamp>.zip` (production dependencies only; no
+`.env`, database, logs or sessions).
 
 ### 2. Create the database
-hPanel → Databases → **MySQL Databases** → create database + user with a
-strong generated password. Note the DB name, user (both prefixed like
-`u123456789_vendo`) and host (normally `localhost`).
+hPanel → Databases → **MySQL Databases** → create a database and user with a
+strong generated password. Note the names (prefixed like `u123456789_vendo`).
 
 ### 3. Upload
 File manager → `domains/vendo-kiosk.ebnleadgen.online/` → upload the zip →
-Extract. You should see `public_html/` and `vendo_app/` side by side. Remove the
-old Hostinger default `index.html` / `default.php` from `public_html` if present
-(it takes precedence over `index.php` on some setups).
+**Extract**. Merge the zip's `public_html/` into the existing one (keep `api/`)
+and check that `vendo_dashboard/` sits next to `public_html/`.
+
+Make `vendo_dashboard/storage` and `vendo_dashboard/bootstrap/cache` writable
+(755 folders are normally fine on Hostinger).
 
 ### 4. Configure `.env`
-In `vendo_app/`, copy `.env.example` to `.env` and fill in:
+In `vendo_dashboard/`, copy `.env.example` to `.env` and set:
 ```
+APP_ENV=production
+APP_DEBUG=false
 APP_URL=https://vendo-kiosk.ebnleadgen.online
+APP_KEY=base64:<32 random bytes, base64>
+DB_CONNECTION=mysql
 DB_HOST=localhost
-DB_NAME=u123456789_vendo
-DB_USER=u123456789_vendo
-DB_PASS=<the generated password>
-SETUP_TOKEN=<32+ random characters>
-SESSION_SECURE=1
+DB_DATABASE=u123456789_vendo
+DB_USERNAME=u123456789_vendo
+DB_PASSWORD=<the generated password>
+SESSION_DRIVER=file
+SESSION_SECURE_COOKIE=true
+SETUP_TOKEN=<24+ random characters>
 ```
-Generate the token on your PC: `php -r "echo bin2hex(random_bytes(24));"`.
-Set file permissions of `.env` to **600** (File manager → Permissions).
+Generate values on your PC:
+`php -r "echo 'base64:'.base64_encode(random_bytes(32)), PHP_EOL, bin2hex(random_bytes(16)), PHP_EOL;"`
+(first line → `APP_KEY`, second → `SETUP_TOKEN`). Set `.env` permissions to **600**.
 
 ### 5. HTTPS
-hPanel → Security → **SSL**: make sure the subdomain has an active certificate
-(it does today) and enable *Force HTTPS*. The `.htaccess` also redirects HTTP
-to HTTPS and sends HSTS.
+hPanel → Security → **SSL**: active certificate (it is today) and *Force HTTPS*.
+The app sends HSTS on HTTPS requests and trusts the Hostinger proxy headers.
 
-### 6. Run migrations + create the first administrator
-Open `https://vendo-kiosk.ebnleadgen.online/setup`, enter the `SETUP_TOKEN`, an
-admin username and a 12+ character password. This applies
-`vendo_app/migrations/001_init.sql` and creates the admin.
-Then **remove `SETUP_TOKEN` from `.env`** (Diagnostics warns while it is set).
+### 6. Create the tables and the first administrator
+Open `https://vendo-kiosk.ebnleadgen.online/setup`, enter the `SETUP_TOKEN`, your
+name, a username and a password (10+ characters, letters and numbers). This runs
+the migrations and signs you in. Then **remove `SETUP_TOKEN` from `.env`** — the
+page answers 404 once an administrator exists or the token is unset.
 
-Alternative: phpMyAdmin → Import `001_init.sql`, then
-`php vendo_app/bin/migrate.php` and `php vendo_app/bin/create-admin.php <name>`
-over SSH (if your plan has it). Note: importing via phpMyAdmin does not record
-the migration — prefer `/setup`.
+With SSH instead: `php artisan migrate --force` in `vendo_dashboard/`, then use
+`/setup` (or `php artisan tinker` to create the user).
 
-### 7. Routing check
-API routing is done by `public_html/.htaccess` (front controller). Verify:
-```
-curl https://vendo-kiosk.ebnleadgen.online/api/v1/health
-```
-→ `{"ok":true,...,"database":"ok","pending_migrations":0}`
-
-### 8. Client IP behind the Hostinger CDN
-Sign in → **Diagnostics**. If `REMOTE_ADDR` is a CDN address and
-`X-Forwarded-For` shows your real IP, set `TRUSTED_IP_HEADER=HTTP_X_FORWARDED_FOR`
-in `.env` so login/enrollment rate limits are per visitor.
-
-### 9. Scheduled job (optional)
-Not required (offline status is computed when pages load). For housekeeping,
-hPanel → Advanced → **Cron Jobs**, daily:
-```
-/usr/bin/php /home/<user>/domains/vendo-kiosk.ebnleadgen.online/vendo_app/bin/maintenance.php
-```
-
-### 10. Verify the deployment (all must pass before calling it live)
-1. `GET /api/v1/health` → 200, `database: ok`, `pending_migrations: 0`.
-2. Dashboard loads at `/`, redirects to `/login`; sign-in works; wrong password
-   is rejected; `/audit` shows the login.
-3. Create a kiosk → generate a **coin controller** code → enroll the ESP8266
-   (setup portal) → within ~15 s the device shows **ONLINE** with reported time.
-4. Insert a coin → the event appears under *Coin events* once (not twice).
-5. Generate a **phone** code → enroll in the app (Admin → Cloud) → the phone row
-   shows mode / Device Owner / access.
-6. `curl -X POST https://vendo-kiosk.ebnleadgen.online/api/v1/controller/sync`
+### 7. Verify (all must pass before calling it live)
+1. `GET /api/v1/health` → 200, `"database":"ok"`, `"pending_migrations":0`.
+2. `/` redirects to `/login`; sign-in works; a wrong password is rejected;
+   *Audit log* shows both.
+3. `curl -X POST https://vendo-kiosk.ebnleadgen.online/api/v1/controller/sync`
    without a token → `401`.
+4. `/api/status.php` still answers as before.
+5. Add a site → **Enroll a device → Coin box** → enter the code in the coin box
+   setup portal (hold FLASH 10 s) → within ~15 s the coin box shows **ONLINE**.
+6. For each tablet: **Enroll a device → Tablet N** → tablet Admin → Cloud → enter
+   the code; then pair it with the coin box as Tablet N (Admin → Coin box).
+7. Click **Select for next coins** on a tablet card → the coin box LCD shows
+   `Insert: Tab N` within ~2 s → insert a coin → only that tablet unlocks and the
+   coin appears once under *Recent coins*.
+8. Insert a coin with nothing selected → *Held coins* shows it → **Give to
+   Tablet N** → that tablet gets the time.
 
 ## Updating (and rollback)
+1. Back up: phpMyAdmin → Export; File manager → download `vendo_dashboard/.env`.
+2. Build a new zip (step 1) and extract it over the existing folders — `.env`,
+   `storage/` contents and the database are kept.
+3. If `/api/v1/health` lists pending migrations, run `php artisan migrate --force`
+   over SSH (or ask for a migration page; `/setup` only works on an empty install).
 
-1. Back up: phpMyAdmin → Export the database; File manager → compress and
-   download `public_html` and `vendo_app` (keep `.env`!).
-2. Upload the new zip, extract **over** the existing folders (your `.env` is not
-   in the zip and is kept).
-3. Sign in → Diagnostics → *Apply pending migrations* if any are listed.
-4. Check `/api/v1/health`.
-
-Rollback: restore the downloaded folders. If a migration ran, restore the
-database export too (migrations are forward-only).
-
-Hostinger also keeps automatic backups (hPanel → Files → Backups) depending on
-plan — check what yours includes.
+Rollback: re-extract the previous zip; restore the database export if a
+migration ran (migrations are forward-only).
 
 ## Credential rotation
 
 | Secret | How to rotate |
 |---|---|
-| Database password | hPanel → MySQL → change password → update `DB_PASS` in `.env` |
-| Admin password | Dashboard → Account (signs out other sessions) |
-| Device token (phone/ESP8266) | Dashboard → kiosk → *Revoke* → generate a new code → re-enroll |
-| Setup token | Remove after setup; set a new one only to re-run `/setup` on an empty DB |
-| Phone ↔ controller key | Re-pair (hold FLASH 3 s); old key stops working immediately |
+| Database password | hPanel → MySQL → change password → `DB_PASSWORD` in `.env` |
+| `APP_KEY` | Only if leaked: set a new one (signs everyone out) |
+| Admin password | Dashboard → your username → Change password (signs out other browsers) |
+| Device token (tablet / coin box) | Site page → Devices → **Revoke** → new code → re-enroll |
+| Setup token | Remove after setup |
+| Tablet ↔ coin box key | Re-pair that tablet number (hold FLASH 3 s) |
 
 ## Security notes for the server
-* `vendo_app/` is outside the web root and also has `Require all denied`.
-* `.htaccess` blocks dotfiles and `.env/.sql/.md/.log` downloads.
-* All responses send `Cache-Control: no-store` so the Hostinger CDN never
-  caches dashboard pages or API answers.
+* `vendo_dashboard/` is outside the web root; nothing in `public_html` contains secrets.
+* Every response sends `Cache-Control: no-store`, a strict Content-Security-Policy
+  (scripts only from this site with a per-request nonce), `X-Frame-Options: DENY`
+  and `nosniff`; the Hostinger CDN never caches dashboard pages or API answers.
+* Login is throttled per username+IP and per IP; device enrollment per IP.

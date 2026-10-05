@@ -1,24 +1,46 @@
 # Architecture and behaviour
 
 ```
- Coin slot ──pulses──▶ ESP8266 coin controller ◀──signed status (LAN, 1 s)── Android kiosk phone
- (Allan, active-low)   • authoritative timer          (local HTTP + HMAC)       • Flutter UI
-                       • 20x4 LCD                                                • Kotlin foreground service
-                       • event buffer                                            • Device Owner + lock task
-                              │                                                         │
-                              └──── outbound HTTPS (events, status) ────▶ Hostinger ◀───┘ outbound HTTPS
-                                                                          PHP + MySQL      (heartbeat, config)
-                                                                          dashboard + /api/v1
+                                                         ┌──▶ Tablet 1 ┐
+ Coin slot ──pulses──▶ ESP8266 coin box ◀──signed status─┼──▶ Tablet 2 ├ Android kiosk tablets (up to 4)
+ (Allan, active-low)   • 4 authoritative timers  (LAN)   ├──▶ Tablet 3 │ • Flutter UI, Kotlin service
+                       • held coins, selection           └──▶ Tablet 4 ┘ • Device Owner + lock task
+                       • 20x4 LCD, event buffer                    │
+                              │  poll ~2 s, sync 15 s              │ heartbeat 30 s
+                              └──── outbound HTTPS ──▶ Hostinger ◀─┘
+                                                       Laravel + MySQL: dashboard + /api/v1
+                                                              ▲
+                                             attendant (phone/PC browser): "next coins → Tablet 2"
 ```
+
+## One coin box, several tablets
+
+1. The attendant clicks **Select for next coins** on a tablet card in the
+   dashboard. The coin box picks it up on its next poll (~2 s): the LCD shows
+   `Insert: Tab 2` and that tablet shows a green **Tablet 2** badge
+   ("The coin box is ready…").
+2. Coins go to the selected tablet. The selection lasts 90 s and each coin
+   extends it, so a forgotten selection cannot send a later customer's coins to
+   the wrong tablet.
+3. A coin inserted with **no** selection is **held** (LCD `Held: ₱5 ask staff`,
+   dashboard *Held coins*); the attendant gives it to a tablet with one click.
+4. With exactly one tablet paired there is nothing to choose: coins go straight
+   to it (single-tablet kiosks need no attendant).
+5. Internet down: the dashboard cannot reach the box, but a short press on the
+   FLASH button (inside the locked box) cycles the selection; tablets keep
+   working over the LAN.
+6. The dashboard can also **add free time** or **end** a tablet's session; these
+   are audited commands applied by the coin box exactly once.
 
 ## Who decides what
 
 | Concern | Authority | Notes |
 |---|---|---|
-| Paid time | **ESP8266** | Only accepted coin pulses add time. No network endpoint grants time. |
+| Paid time (per tablet) | **ESP8266** | Coins add time to the selected tablet. Audited dashboard commands (add time, assign held coins, end) are applied by the box itself; no LAN endpoint grants time. |
+| Which tablet gets the next coins | **Attendant** (dashboard) | FLASH button as offline fallback; automatic with a single paired tablet. |
 | Customer access on the phone | **Phone (native)** | `AccessPolicy` + Device Owner lock task allowlist. |
 | Rates, allowed apps, loss timeout | **Cloud config** (versioned) | Also editable locally on the phone by the admin. |
-| Records (events, sessions, audit) | **Cloud** | Never pushed back to devices as time. |
+| Records (events, sessions, audit) | **Cloud** | Events and status are never pushed back as time; only explicit commands are. |
 
 ## Android components (`android/app/src/main/kotlin/online/ebnleadgen/vendokiosk`)
 
@@ -97,9 +119,9 @@ is not relied on.
 
 | Where | What | When written |
 |---|---|---|
-| Phone SharedPreferences | mode, controller address/id, allowed apps, loss timeout, cloud config version | on change |
+| Phone SharedPreferences | mode, controller address/id, **tablet number**, allowed apps, loss timeout, cloud config version | on change |
 | Phone (Keystore-encrypted) | controller HMAC key, cloud token, PIN + recovery hashes | on change |
-| ESP8266 LittleFS `/settings.txt` | Wi-Fi, cloud token, pairing key, rate | on change only |
-| ESP8266 LittleFS `/session.txt` | remaining seconds checkpoint | each coin, expiry, and every 60 s while running (never every second) |
+| ESP8266 LittleFS `/settings.txt` | Wi-Fi, cloud token, a pairing key per tablet, rate | on change only |
+| ESP8266 LittleFS `/session.txt` | each tablet's remaining seconds, held coins, last 16 applied command ids | each coin, expiry, command, and every 60 s while running |
 | ESP8266 RAM | unsent events (48 max) | lost on power loss (documented) |
-| MySQL | events, sessions, status, config versions, audit | on each request |
+| MySQL | sites, devices, events, per-tablet sessions, status, config versions, commands, audit | on each request |

@@ -2,15 +2,17 @@
 
 ![VeNdO logo](assets/images/vendo_logo.png)
 
-A coin-operated Android kiosk. Customers insert coins into an ESP8266-based
-coin box, get time (1 pulse = 4 minutes), and use administrator-approved apps
-on a TECNO Spark 30C running in Android **lock task (kiosk) mode**. A PHP/MySQL
-dashboard on Hostinger records coins, sessions and device status.
+A coin-operated Android kiosk. **One ESP8266 coin box serves up to four
+tablets**: customers insert pesos (₱1 = 4 minutes) and use administrator-approved
+apps on tablets running in Android **lock task (kiosk) mode**. A Laravel
+dashboard on Hostinger shows every tablet live; the attendant chooses which
+tablet the next coins go to, can add or end time, and sees coins, sessions and
+device status.
 
-> **Status:** code complete and tested on the computer (see *Checks*). It has
-> **not** yet been tested on the physical phone/coin hardware and the backend is
-> **not deployed** yet. Do not treat kiosk enforcement as production-ready until
-> `docs/PHYSICAL_TEST_CHECKLIST.md` passes.
+> **Status:** tested on the computer, the Android 14/15 emulators and the real
+> coin box (see *Checks*). The dashboard is **not deployed** yet, and the
+> physical tablet checklist (`docs/PHYSICAL_TEST_CHECKLIST.md`) must pass
+> before calling kiosk enforcement production-ready.
 
 ## Project owner and author
 
@@ -26,8 +28,9 @@ Contact: [jonathanquiles59@gmail.com](mailto:jonathanquiles59@gmail.com)
 | `android/app/src/test/` | Kotlin unit tests (session timing, access policy, protocol, PIN) |
 | `test/` | Flutter unit + widget tests |
 | `firmware/vendo_coin_controller/` | ESP8266 Arduino firmware (coin pulses, LCD, local API, cloud sync) |
-| `backend/` | PHP backend + admin dashboard (`public/` = web root, `app/` = private code, migrations, `.env.example`) |
-| `backend/tests/run.php` | Backend test suite |
+| `dashboard/` | Laravel 13 dashboard + device API (`/api/v1`): sites, tablets, live control (Livewire), enrollment, config, audit |
+| `dashboard/tests/` | Pest test suite (device API, poll channel, dashboard) |
+| `dashboard/tools/package.php` | Builds the Hostinger upload zip |
 | `web_backend/` | `GET /api/kiosk-status.php` for the browser demo (fits the existing live `api/` folder), token tool, simulator, tests |
 | `lib/src/web/` | Flutter web client (polling, countdown, token storage) |
 | `docs/` | Guides (below) |
@@ -59,18 +62,19 @@ Contact: [jonathanquiles59@gmail.com](mailto:jonathanquiles59@gmail.com)
 > `/api/kiosk-status.php` (see docs/WEB_KIOSK.md); it cannot enforce anything.
 > Desktop builds run an in-memory preview. The kiosk itself is the Android APK.
 
-### 2. Build the coin controller
+### 2. Build the coin box
 Wire it as in `docs/ESP8266_FIRMWARE.md`, flash the firmware, connect it to
-Wi-Fi through its setup access point, and pair the phone (hold FLASH 3 s for
-the pairing code).
+Wi-Fi through its setup access point, and pair each tablet with its own
+tablet number (hold FLASH 3 s for the pairing code; tablet: Admin → Coin box).
 
 ### 3. Production kiosk
 Provision the phone as Device Owner (`docs/DEVICE_OWNER_PROVISIONING.md`),
 then Admin → Kiosk mode → *Enable production kiosk*.
 
 ### 4. Dashboard
-Deploy `backend/` to Hostinger (`docs/DEPLOYMENT_HOSTINGER.md`), create a kiosk,
-and enroll the phone and controller with the one-time codes.
+Deploy `dashboard/` to Hostinger (`docs/DEPLOYMENT_HOSTINGER.md`), add a site,
+and enroll the coin box and each tablet (Tablet 1–4) with one-time codes. Then
+the site page lets the attendant pick the tablet for the next coins.
 
 ## Rates
 
@@ -93,30 +97,30 @@ flutter test
 flutter build apk --debug                       # → build/app/outputs/flutter-apk/app-debug.apk
 flutter build apk --release                     # signed with android/key.properties → app-release.apk
 cd android && ./gradlew :app:testDebugUnitTest  # Kotlin unit tests
-php backend/tests/run.php                       # backend tests (SQLite in-memory)
-php backend/tools/package.php                   # → dist/vendo-backend-*.zip for Hostinger
+cd dashboard && php artisan test                # dashboard + device API tests (SQLite in-memory)
+cd dashboard && npm run build && php tools/package.php   # → dist/vendo-dashboard-*.zip for Hostinger
 arduino-cli compile --fqbn esp8266:esp8266:nodemcuv2 firmware/vendo_coin_controller
 ```
 
-Local backend for development (SQLite): create `backend/app/.env` with
-`DB_DRIVER=sqlite`, `DB_PATH=<some path>/dev.sqlite`, `SETUP_TOKEN=<24+ chars>`,
-`SESSION_SECURE=0`, then `php -S 127.0.0.1:8000 -t backend/public backend/public/index.php`.
-Never commit `.env`.
+Local dashboard (SQLite): in `dashboard/`, `composer install`, `npm install`,
+`cp .env.example .env`, `php artisan key:generate`, set `SESSION_SECURE_COOKIE=false`,
+then `php artisan migrate:fresh --seed --seeder=DemoSeeder` and `php artisan serve`
+(sign in as `demo` / `demo-pass-123`). Never commit `.env`.
 
-## Checks run on 2026-10-04
+## Checks run on 2026-10-05
 
 | Check | Result |
 |---|---|
 | `flutter analyze` | no issues |
-| `flutter test` | 47 passed |
-| Kotlin unit tests (`testDebugUnitTest`) | 40 passed |
-| `flutter build apk --debug` | built (minSdk 29, targetSdk 36) |
-| Android lint | 0 errors in project code (2 errors only in the machine-generated `android/local.properties`) |
-| Backend `php -l` + `backend/tests/run.php` | 95 checks passed |
-| `web_backend/tests/run.php` (kiosk-status endpoint) | 29 checks passed |
-| Browser end-to-end (headless Chrome → localhost:5173 → PHP API with CORS) | preflight 204, polling every ~3 s, 200s |
-| Backend HTTP smoke test (local PHP server, SQLite) | setup → login → kiosk → enroll → sync → dedup → 401 without token: OK |
-| Firmware compile (NodeMCU 1.0 and D1 mini, ESP8266 core 3.1.2) | OK, RAM 44 %, flash 41 % |
+| `flutter test` | 105 passed |
+| Kotlin unit tests (`testDebugUnitTest`) | 44 passed |
+| `flutter build apk --release` | built and signed (minSdk 29, targetSdk 36) |
+| Dashboard `php artisan test` (Pest) | 37 passed |
+| `web_backend/tests/run.php` (kiosk-status endpoint) | 34 checks passed |
+| Dashboard in headless Chrome (desktop + phone width, strict CSP) | no console errors; Livewire actions work |
+| Packaged dashboard zip, production mode (SQLite) | health 200, login/setup 200, unknown API 404 |
+| Firmware 2.0 compile (NodeMCU 1.0) | OK, RAM 47 %, flash 43 % |
+| Real coin box + Pixel Tablet emulator | 1.x pairing migrated to Tablet 1, protocol 2 link verified, single-tablet auto-routing |
 
 ## Application ID
 

@@ -89,19 +89,45 @@ Rates: ₱1 (1 pulse) = 4 min, ₱5 = 20 min, ₱10 = 40 min, ₱20 = 80 min —
 acceptor is set to one pulse per peso, and the kiosk UI and LCD say "peso".
 Coins during a session extend it.
 
+## One coin box, up to four tablets (firmware 2.0)
+
+The box keeps a separate timer for tablets 1–4. Each coin goes to:
+
+1. the tablet the attendant selected on the dashboard (lasts 90 s, each coin
+   extends it), or the one chosen with the FLASH button when offline;
+2. otherwise, if exactly **one** tablet is paired, that tablet (single-tablet
+   kiosks work without an attendant);
+3. otherwise it is **held** until the attendant gives it to a tablet.
+
+The dashboard reaches the box through `POST /api/v1/controller/poll` every ~2 s
+(needs the box enrolled with a coin box code). Poll, event sync and the
+`status.php` upload share one kept-alive, certificate-verified TLS connection,
+so each request takes ~0.2 s instead of a multi-second handshake.
+
 ## LCD
 
 ```
-VeNdO  INSERT COIN   ← or VeNdO  TIMER RUNNING
-Time: 00:19:42
-Last added: 20 min
-Last coin: ₱5        ← ₱ is a custom LCD character
+VeNdO  Insert: Tab 2   ← attendant selection; "INSERT COIN" with one tablet, "Ask staff" otherwise
+ 1 44:12  >2 03:05     ← every tablet's time; > marks where coins go now
+ 3  --     4  --
+Held: ₱5 ask staff     ← or "Last: ₱5 Tab 2" (₱ is a custom LCD character)
 ```
 
 Only changed rows are rewritten; the screen is cleared once at start-up.
-Temporary admin screens: short press FLASH → rows 3–4 show IP and device ID for
-10 s; pairing mode → row 3 shows `PAIR CODE: nnnnnn`, row 4 the IP; setup mode
-shows the access-point name and password.
+Pairing mode → `PAIR CODE: nnnnnn`, the IP, "Enter on the tablet"; hold FLASH
+1–3 s → the IP for 10 s; setup mode shows the access-point name and password.
+
+## FLASH button and USB serial
+
+| Action | Effect |
+|---|---|
+| short press | next coins → next tablet (1 → 2 → 3 → 4 → held), 90 s |
+| hold 1–3 s | show IP on the LCD |
+| hold 3 s | open the 2-minute tablet pairing window |
+| hold 10 s | restart into Wi-Fi setup (time is checkpointed first) |
+
+Serial (115200 baud): `pair`, `status` (all tablets, selection, held coins),
+`select=N` (0 = hold), `status_token=…`, `status_device_id=…`, `status_url=…`.
 
 ## Building and flashing
 
@@ -118,7 +144,10 @@ arduino-cli compile --fqbn esp8266:esp8266:nodemcuv2 firmware/vendo_coin_control
 arduino-cli upload  --fqbn esp8266:esp8266:nodemcuv2 -p COM5 firmware/vendo_coin_controller
 ```
 Or flash a prebuilt binary with esptool:
-`esptool.py --port COM5 write_flash 0x0 dist/firmware/vendo_coin_controller-1.0.0-nodemcuv2.bin`
+`esptool.py --port COM5 write_flash 0x0 dist/firmware/vendo_coin_controller-2.0.0-nodemcuv2.bin`
+
+Upgrading from 1.x keeps Wi-Fi, cloud enrollment and the paired phone, which
+becomes **tablet 1**; the tablet app must be the protocol 2 version.
 
 ## First-time setup
 
@@ -129,8 +158,9 @@ Or flash a prebuilt binary with esptool:
    **coin controller enrollment code** from the dashboard. Save → it restarts.
 4. Give the controller a fixed IP: create a **DHCP reservation** for its MAC in
    your router (recommended), so the phone always finds it.
-5. Pair the phone: short-press FLASH to see the IP; hold FLASH **3 s** to show
-   the pairing code; enter both in the phone's Admin → Coin controller.
+5. Pair each tablet: hold FLASH **3 s** to show the pairing code and IP; on the
+   tablet: Admin → Coin box → choose its **tablet number** → enter IP and code.
+   Pairing a number again replaces only that tablet.
 
 To change Wi-Fi later, hold FLASH **10 s** (restarts into setup mode). Paid time
 is checkpointed first.

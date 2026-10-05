@@ -19,7 +19,8 @@ class AuthenticateDevice
 {
     public function handle(Request $request, Closure $next, string $type): Response
     {
-        $token = $request->bearerToken();
+        // Some hosts strip Authorization; X-Device-Token carries the same credential.
+        $token = $request->bearerToken() ?? $request->header('X-Device-Token');
         $device = null;
         if ($token !== null && preg_match('/^vkd_([0-9a-f]{16})_([A-Za-z0-9_-]{43})$/', $token, $m)) {
             $candidate = Device::where('public_id', $m[1])->first();
