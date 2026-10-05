@@ -380,7 +380,7 @@ class _AppTile extends StatelessWidget {
                 style: (large
                         ? Theme.of(context).textTheme.titleMedium
                         : Theme.of(context).textTheme.titleSmall)
-                    ?.copyWith(fontWeight: FontWeight.w700, color: Colors.white),
+                    ?.copyWith(fontWeight: FontWeight.w700, color: KioskPalette.text),
               ),
             ],
           ),

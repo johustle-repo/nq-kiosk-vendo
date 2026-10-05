@@ -62,7 +62,7 @@ class _VendoKioskAppState extends State<VendoKioskApp> {
       debugShowCheckedModeBanner: false,
       theme: buildTheme(Brightness.light),
       darkTheme: buildTheme(Brightness.dark),
-      themeMode: ThemeMode.dark,
+      themeMode: ThemeMode.light,
       builder: (context, child) => clampTextScale(context, child),
       home: KioskShell(controller: widget.controller),
     );

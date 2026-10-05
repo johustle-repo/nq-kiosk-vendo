@@ -14,6 +14,7 @@ import online.ebnleadgen.vendokiosk.MainActivity
 import online.ebnleadgen.vendokiosk.core.AccessDecision
 import online.ebnleadgen.vendokiosk.core.AccessInputs
 import online.ebnleadgen.vendokiosk.core.AccessPolicy
+import online.ebnleadgen.vendokiosk.core.RestrictedApps
 import online.ebnleadgen.vendokiosk.core.ControllerProtocol
 import online.ebnleadgen.vendokiosk.core.ControllerProtocol.toHex
 import online.ebnleadgen.vendokiosk.core.ControllerStatus
@@ -576,7 +577,7 @@ class KioskEngine private constructor(context: Context) {
     }
 
     fun setAllowedPackages(packages: List<String>) {
-        store.allowedPackages = packages.filter { it.matches(Regex("^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$")) && it != ctx.packageName }
+        store.allowedPackages = RestrictedApps.filter(packages).filter { it.matches(Regex("^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$")) && it != ctx.packageName }
         handler.post { evaluate(); emit() }
     }
 
@@ -745,7 +746,7 @@ class KioskEngine private constructor(context: Context) {
 
     /** Whether a customer app may be launched right now. */
     fun canLaunch(packageName: String): Boolean =
-        decision.granted && packageName in store.allowedPackages
+        decision.granted && packageName in store.allowedPackages && !RestrictedApps.isRestricted(packageName)
 
     fun diagnostics(): Map<String, Any?> = policy.diagnostics() + mapOf(
         "appVersion" to BuildConfig.VERSION_NAME,

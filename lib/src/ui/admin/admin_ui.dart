@@ -61,7 +61,7 @@ class AdminSection extends StatelessWidget {
                     title,
                     style: t.titleMedium?.copyWith(
                       fontWeight: FontWeight.w800,
-                      color: Colors.white,
+                      color: KioskPalette.text,
                     ),
                   ),
                 ),
@@ -133,7 +133,7 @@ class InfoRow extends StatelessWidget {
               value == null || value!.isEmpty ? '—' : value!,
               textAlign: TextAlign.right,
               style: t.bodyMedium?.copyWith(
-                color: valueColor ?? Colors.white,
+                color: valueColor ?? KioskPalette.text,
                 fontWeight: FontWeight.w600,
                 fontFamily: mono ? 'monospace' : null,
               ),
@@ -332,7 +332,7 @@ Future<bool> adminConfirm(
             style: destructive
                 ? FilledButton.styleFrom(
                     backgroundColor: KioskPalette.danger,
-                    foregroundColor: Colors.black,
+                    foregroundColor: Colors.white,
                   )
                 : null,
             onPressed: () => Navigator.pop(c, true),

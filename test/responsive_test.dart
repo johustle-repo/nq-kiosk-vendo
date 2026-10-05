@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:vendo_kiosk/src/ui/widgets.dart';
 import 'package:vendo_kiosk/main.dart';
 import 'package:vendo_kiosk/src/bridge/kiosk_bridge.dart';
 import 'package:vendo_kiosk/src/kiosk_controller.dart';
@@ -61,11 +62,15 @@ void main() {
     }
   }
 
-  testWidgets('tablet landscape uses two columns on the payment screen', (tester) async {
+  testWidgets('tablet payment screen is one centred column', (tester) async {
     await pump(tester, const Size(1280, 800), snapshot());
-    final timer = tester.getCenter(find.byKey(const Key('countdown')));
+    // The pill's centre (its digits sit right of centre, after the "TIME" label).
+    final timer = tester.getCenter(find.descendant(of: find.byType(TimePill), matching: find.byType(Container)).first);
+    final button = tester.getCenter(find.byKey(const Key('insert-coin-button')));
     final rates = tester.getCenter(find.byKey(const Key('rate-1')));
-    expect(rates.dx, greaterThan(timer.dx + 200), reason: 'rates beside the timer');
+    expect(timer.dx, closeTo(640, 2), reason: 'timer centred');
+    expect(button.dx, closeTo(640, 2), reason: 'button centred');
+    expect(rates.dy, greaterThan(timer.dy), reason: 'rates below the timer');
   });
 
   testWidgets('phone portrait stacks the payment screen in one column', (tester) async {

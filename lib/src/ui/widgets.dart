@@ -357,7 +357,7 @@ class RateTable extends StatelessWidget {
               SizedBox(width: large ? 10 : 8),
               Text(
                 'Rates',
-                style: TextStyle(fontSize: large ? 22 : 17, fontWeight: FontWeight.w800, color: Colors.white),
+                style: TextStyle(fontSize: large ? 22 : 17, fontWeight: FontWeight.w800, color: KioskPalette.text),
               ),
             ],
           ),
@@ -404,7 +404,7 @@ class RateTable extends StatelessWidget {
                         Rates.secondsFor(Rates.displayPulses[i], secondsPerPulse: secondsPerPulse),
                       ),
                       key: Key('rate-${Rates.displayPulses[i]}'),
-                      style: TextStyle(fontSize: value, fontWeight: FontWeight.w800, color: Colors.white),
+                      style: TextStyle(fontSize: value, fontWeight: FontWeight.w800, color: KioskPalette.text),
                     ),
                   ),
                 ],
@@ -427,6 +427,73 @@ class RateTable extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Tablet rates: one centred row of peso cards (₱1 / 4 min, ...).
+class RateStrip extends StatelessWidget {
+  const RateStrip({super.key, required this.secondsPerPulse});
+
+  final int secondsPerPulse;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Row(
+        children: [
+          for (var i = 0; i < Rates.displayPulses.length; i++) ...[
+            if (i > 0) const SizedBox(width: 14),
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 12),
+                decoration: BoxDecoration(
+                  color: KioskPalette.surface,
+                  borderRadius: BorderRadius.circular(22),
+                  border: Border.all(color: KioskPalette.outline),
+                ),
+                child: Column(
+                  children: [
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        '₱${Rates.displayPulses[i]}',
+                        style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w900, color: KioskPalette.coin),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        Rates.describeDuration(
+                          Rates.secondsFor(Rates.displayPulses[i], secondsPerPulse: secondsPerPulse),
+                        ),
+                        key: Key('rate-${Rates.displayPulses[i]}'),
+                        style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: KioskPalette.text),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+      const SizedBox(height: 14),
+      const Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.add_circle_outline, size: 18, color: KioskPalette.accent),
+          SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              'Additional coins extend your time.',
+              style: TextStyle(fontSize: 16, color: KioskPalette.textMuted),
+            ),
+          ),
+        ],
+      ),
+    ],
+  );
 }
 
 /// 12-hour clock text, e.g. "1:42 PM".
@@ -526,7 +593,7 @@ class StatusNotice extends StatelessWidget {
             title,
             key: const Key('payment-headline'),
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: large ? 34 : 24, fontWeight: FontWeight.w900, color: Colors.white),
+            style: TextStyle(fontSize: large ? 34 : 24, fontWeight: FontWeight.w900, color: KioskPalette.text),
           ),
           SizedBox(height: large ? 10 : 6),
           Text(

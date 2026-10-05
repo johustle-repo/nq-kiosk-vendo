@@ -15,6 +15,7 @@ import android.os.UserManager
 import android.provider.Settings
 import android.util.Log
 import online.ebnleadgen.vendokiosk.MainActivity
+import online.ebnleadgen.vendokiosk.core.RestrictedApps
 
 /** The Device Policy Controller component. */
 class KioskDeviceAdminReceiver : DeviceAdminReceiver() {
@@ -38,6 +39,10 @@ class KioskDeviceAdminReceiver : DeviceAdminReceiver() {
  * enforcement that is not actually in place.
  */
 class KioskPolicy(private val context: Context) {
+    private companion object {
+        const val GMS = "com.google.android.gms"
+    }
+
     private val dpm = context.getSystemService(DevicePolicyManager::class.java)
     private val admin = KioskDeviceAdminReceiver.component(context)
     private val pkg = context.packageName
@@ -55,6 +60,9 @@ class KioskPolicy(private val context: Context) {
         add(UserManager.DISALLOW_CONFIG_DATE_TIME)
         add(UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
         add(UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES_GLOBALLY)
+        // A customer's Google (or other) account would stay on the shared kiosk
+        // for the next customer, so sign-in is refused with an admin message.
+        add(UserManager.DISALLOW_MODIFY_ACCOUNTS)
     }
 
     fun isDeviceOwner(): Boolean = dpm.isDeviceOwnerApp(pkg)
@@ -132,11 +140,18 @@ class KioskPolicy(private val context: Context) {
         if (!isDeviceOwner()) return false
         val allowed = buildList {
             add(pkg)
-            packages?.filter { it != pkg && isInstalled(it) }?.let { addAll(it) }
+            packages?.let(RestrictedApps::filter)?.filter { it != pkg && isInstalled(it) }?.let { addAll(it) }
             // The Recents button and the gesture-navigation Home swipe are served by
             // the system launcher's recents activity even though this app is Home.
             // Without it on the allowlist both land on "App is not available".
             if (packages != null) recentsProviderPackage()?.let { add(it) }
+            // Runtime permission prompts (camera, microphone, notifications...) are
+            // shown by the system permission controller; without it approved apps
+            // get "App is not available" when they ask for a permission.
+            if (packages != null) permissionControllerPackage()?.let { add(it) }
+            // Google Play services hosts sign-in and consent screens that approved
+            // apps open; account sign-in itself is blocked by DISALLOW_MODIFY_ACCOUNTS.
+            if (packages != null && isInstalled(GMS)) add(GMS)
         }.distinct()
         dpm.setLockTaskPackages(admin, allowed.toTypedArray())
         var features = DevicePolicyManager.LOCK_TASK_FEATURE_HOME or DevicePolicyManager.LOCK_TASK_FEATURE_SYSTEM_INFO
@@ -159,6 +174,15 @@ class KioskPolicy(private val context: Context) {
         val recents = ComponentName.unflattenFromString(context.resources.getString(id))?.packageName ?: return null
         val settings = context.packageManager.resolveActivity(Intent(Settings.ACTION_SETTINGS), 0)?.activityInfo?.packageName
         return recents.takeIf { it != pkg && it != settings && isInstalled(it) }
+    }
+
+    /** Package that shows runtime permission prompts. Never the Settings app. */
+    private fun permissionControllerPackage(): String? {
+        val pm = context.packageManager
+        val pc = pm.resolveActivity(Intent("android.content.pm.action.REQUEST_PERMISSIONS"), 0)
+            ?.activityInfo?.packageName ?: return null
+        val settings = pm.resolveActivity(Intent(Settings.ACTION_SETTINGS), 0)?.activityInfo?.packageName
+        return pc.takeIf { it != pkg && it != settings }
     }
 
     private fun isInstalled(p: String) = try {

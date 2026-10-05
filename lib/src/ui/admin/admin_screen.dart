@@ -233,7 +233,7 @@ class _Page extends StatelessWidget {
                 title!,
                 style: t.headlineSmall?.copyWith(
                   fontWeight: FontWeight.w900,
-                  color: Colors.white,
+                  color: KioskPalette.text,
                 ),
               ),
               if (subtitle != null) ...[
@@ -307,7 +307,7 @@ class _OverviewPage extends StatelessWidget {
         icon: Icons.apps,
         label: 'Allowed apps',
         value: '${s.allowedPackages.length}',
-        color: s.allowedPackages.isEmpty ? KioskPalette.warn : Colors.white,
+        color: s.allowedPackages.isEmpty ? KioskPalette.warn : KioskPalette.text,
       ),
     ];
 
@@ -668,7 +668,7 @@ class _AppsPageState extends State<_AppsPage> {
                             'Customer apps',
                             style: t.headlineSmall?.copyWith(
                               fontWeight: FontWeight.w900,
-                              color: Colors.white,
+                              color: KioskPalette.text,
                             ),
                           ),
                           const SizedBox(height: 4),

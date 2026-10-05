@@ -2,23 +2,23 @@ import 'package:flutter/material.dart';
 
 const kBrandSeed = Color(0xFF018E4E); // VeNdO logo green
 
-/// Fixed kiosk palette (dark, high contrast, readable from a distance).
-/// Colours taken from the VeNdO logo: charcoal letters (#36383A), the green
-/// "N" (#018E4E) and its circuit highlights (#01C166), and the gold peso coin.
+/// Fixed kiosk palette: light, matching the VeNdO logo artwork (charcoal
+/// letters #36383A on white, the green "N" #018E4E, the gold peso coin).
 class KioskPalette {
-  static const background = Color(0xFF17181A);
-  static const surface = Color(0xFF222427);
-  static const surfaceHigh = Color(0xFF2D3033);
-  static const outline = Color(0xFF42464A);
-  static const accent = Color(0xFF1FC370);
-  static const accentDeep = Color(0xFF018E4E);
+  static const background = Color(0xFFF4F5F5);
+  static const surface = Color(0xFFFFFFFF);
+  static const surfaceHigh = Color(0xFFEDEFF0);
+  static const outline = Color(0xFFD9DCDF);
+  static const accent = Color(0xFF018E4E);
+  static const accentDeep = Color(0xFF017040);
   static const charcoal = Color(0xFF36383A);
+  static const text = Color(0xFF1F2123);
   static const logoBackground = Color(0xFFFEFEFE);
-  static const coin = Color(0xFFF2B22E);
-  static const ok = Color(0xFF34D27B);
-  static const warn = Color(0xFFF59E0B);
-  static const danger = Color(0xFFF87171);
-  static const textMuted = Color(0xFFA4A9AE);
+  static const coin = Color(0xFFB97D0C);
+  static const ok = Color(0xFF138A4C);
+  static const warn = Color(0xFFB86E00);
+  static const danger = Color(0xFFC62F2B);
+  static const textMuted = Color(0xFF5F6468);
 }
 
 /// How urgent the remaining time is (drives the timer card colours).
@@ -39,16 +39,17 @@ Color timeLevelColor(TimeLevel l) => switch (l) {
 };
 
 ThemeData buildTheme(Brightness brightness) {
-  // The kiosk always uses the dark palette; [brightness] is kept for callers.
+  // The kiosk always uses the light palette; [brightness] is kept for callers.
   final scheme =
       ColorScheme.fromSeed(
         seedColor: kBrandSeed,
-        brightness: Brightness.dark,
+        brightness: Brightness.light,
       ).copyWith(
         primary: KioskPalette.accent,
-        onPrimary: const Color(0xFF032313),
-        primaryContainer: KioskPalette.accentDeep,
-        onPrimaryContainer: const Color(0xFFD2F6E2),
+        onPrimary: Colors.white,
+        primaryContainer: const Color(0xFFD3F2E2),
+        onPrimaryContainer: const Color(0xFF00391F),
+        onSurface: KioskPalette.text,
         surface: KioskPalette.surface,
         surfaceContainerHighest: KioskPalette.surfaceHigh,
         outline: KioskPalette.outline,
@@ -57,13 +58,13 @@ ThemeData buildTheme(Brightness brightness) {
   final base = ThemeData(
     colorScheme: scheme,
     useMaterial3: true,
-    brightness: Brightness.dark,
+    brightness: Brightness.light,
   );
   return base.copyWith(
     scaffoldBackgroundColor: KioskPalette.background,
     textTheme: base.textTheme.apply(
-      bodyColor: const Color(0xFFE8E9EA),
-      displayColor: Colors.white,
+      bodyColor: KioskPalette.text,
+      displayColor: KioskPalette.text,
     ),
     cardTheme: CardThemeData(
       color: KioskPalette.surface,
@@ -81,7 +82,7 @@ ThemeData buildTheme(Brightness brightness) {
     ),
     snackBarTheme: SnackBarThemeData(
       behavior: SnackBarBehavior.floating,
-      backgroundColor: KioskPalette.surfaceHigh,
+      backgroundColor: KioskPalette.charcoal,
       contentTextStyle: const TextStyle(
         color: Colors.white,
         fontSize: 16,
@@ -106,7 +107,7 @@ ThemeData buildTheme(Brightness brightness) {
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: KioskPalette.surfaceHigh,
+      fillColor: KioskPalette.surface,
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
     ),
     dividerTheme: const DividerThemeData(color: KioskPalette.outline),

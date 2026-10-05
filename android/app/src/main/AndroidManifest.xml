@@ -126,6 +126,12 @@
             <category android:name="android.intent.category.HOME" />
         </intent>
         <intent>
+            <!-- The permission controller, allowlisted during paid time. -->
+            <action android:name="android.content.pm.action.REQUEST_PERMISSIONS" />
+        </intent>
+        <!-- Google Play services, allowlisted during paid time. -->
+        <package android:name="com.google.android.gms" />
+        <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>

@@ -56,17 +56,34 @@ class PaymentScreen extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (problem) ...[
-          StatusNotice(
-            key: blocked ? const Key('blocked-banner') : null,
-            icon: noticeIcon,
-            title: noticeTitle,
-            detail: noticeDetail,
-            color: noticeColor,
+        // Timer first (right under the logo); it doubles as the hidden admin
+        // entry (tap it 7 times quickly).
+        AdminEntry(
+          onTriggered: onAdmin,
+          child: TimePill(
+            remainingMs: s.remainingMs,
             large: !r.isCompact && !r.isLandscapePhone,
           ),
+        ),
+        SizedBox(height: r.isLandscapePhone ? 12 : (r.isCompact ? 20 : 28)),
+        if (problem) ...[
+          Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 640),
+              child: StatusNotice(
+                key: blocked ? const Key('blocked-banner') : null,
+                icon: noticeIcon,
+                title: noticeTitle,
+                detail: noticeDetail,
+                color: noticeColor,
+                large: !r.isCompact && !r.isLandscapePhone,
+              ),
+            ),
+          ),
         ] else ...[
-          Center(child: InsertCoinButton(large: !r.isCompact && !r.isLandscapePhone)),
+          Center(
+            child: InsertCoinButton(large: !r.isCompact && !r.isLandscapePhone),
+          ),
           if (!r.isLandscapePhone) ...[
             SizedBox(height: r.isCompact ? 10 : 16),
             Text(
@@ -78,12 +95,6 @@ class PaymentScreen extends StatelessWidget {
             ),
           ],
         ],
-        SizedBox(height: r.isLandscapePhone ? 12 : (r.isCompact ? 20 : 28)),
-        // The timer doubles as the hidden admin entry (tap it 7 times quickly).
-        AdminEntry(
-          onTriggered: onAdmin,
-          child: TimePill(remainingMs: s.remainingMs, large: !r.isCompact && !r.isLandscapePhone),
-        ),
       ],
     );
 
@@ -91,7 +102,11 @@ class PaymentScreen extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        RateTable(secondsPerPulse: s.secondsPerPulse, large: !r.isCompact && !r.isLandscapePhone),
+        // Tablets: a centred strip of peso cards under the timer.
+        if (!r.isCompact && !r.isLandscapePhone)
+          RateStrip(secondsPerPulse: s.secondsPerPulse)
+        else
+          RateTable(secondsPerPulse: s.secondsPerPulse),
         if (s.isDemo) ...[
           const SizedBox(height: 24),
           SimulatedCoinButtons(
@@ -115,12 +130,12 @@ class PaymentScreen extends StatelessWidget {
               child: LayoutBuilder(
                 builder: (context, box) {
                   final r = Responsive.of(box);
-                  final content = r.twoColumns
+                  // Only landscape phones are too short to stack; everything
+                  // else (phones, tablets) is one centred column.
+                  final content = r.isLandscapePhone
                       ? Row(
-                          // Landscape phones: top-align so the timer never sits below the fold.
-                          crossAxisAlignment: r.isLandscapePhone
-                              ? CrossAxisAlignment.start
-                              : CrossAxisAlignment.center,
+                          // Top-align so the timer never sits below the fold.
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Expanded(child: hero(r)),
                             SizedBox(width: r.gutter),
@@ -147,19 +162,31 @@ class PaymentScreen extends StatelessWidget {
                       ),
                       child: Center(
                         child: ConstrainedBox(
-                          // Tablet portrait: keep the single column comfortably narrow.
+                          // Keep the single column comfortably narrow.
                           constraints: BoxConstraints(
-                            maxWidth: r.twoColumns ? r.maxContentWidth : 640,
+                            maxWidth: r.isLandscapePhone
+                                ? r.maxContentWidth
+                                : (r.isCompact ? 640 : 860),
                           ),
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
-                              for (final b in banners) ...[
-                                b,
-                                const SizedBox(height: 14),
+                              if (!r.isLandscapePhone) ...[
+                                Center(
+                                  child: BrandLogo(
+                                    plate: false,
+                                    height: r.isCompact ? 72 : 120,
+                                  ),
+                                ),
+                                SizedBox(height: r.isCompact ? 20 : 32),
                               ],
                               content,
+                              // Warnings (time expired, ...) sit under the content.
+                              for (final b in banners) ...[
+                                const SizedBox(height: 20),
+                                b,
+                              ],
                             ],
                           ),
                         ),

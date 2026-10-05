@@ -7,6 +7,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.Drawable
 import android.os.Build
+import online.ebnleadgen.vendokiosk.core.RestrictedApps
 import java.io.ByteArrayOutputStream
 
 /** Lists launchable apps (visible via the scoped <queries> LAUNCHER intent) with icons. */
@@ -26,7 +27,7 @@ class AppCatalog(private val context: Context) {
         return resolved
             .mapNotNull { ri ->
                 val pkg = ri.activityInfo.packageName
-                if (pkg == context.packageName || !seen.add(pkg)) return@mapNotNull null
+                if (pkg == context.packageName || RestrictedApps.isRestricted(pkg) || !seen.add(pkg)) return@mapNotNull null
                 if (only != null && pkg !in only) return@mapNotNull null
                 mapOf(
                     "packageName" to pkg,
