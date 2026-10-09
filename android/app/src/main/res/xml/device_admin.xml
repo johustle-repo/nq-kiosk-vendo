@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Device Owner capabilities (lock task, user restrictions, persistent home)
-     do not need legacy device-admin policies; none are requested here. -->
+     do not need legacy device-admin policies. force-lock is for lockNow():
+     switching the display off when the kiosk is idle. -->
 <device-admin xmlns:android="http://schemas.android.com/apk/res/android">
-    <uses-policies />
+    <uses-policies>
+        <force-lock />
+    </uses-policies>
 </device-admin>

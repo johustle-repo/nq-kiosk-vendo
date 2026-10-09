@@ -24,7 +24,10 @@ void main() {
 
     test('rejects invalid input', () {
       expect(() => Rates.secondsFor(-1), throwsArgumentError);
-      expect(() => Rates.secondsFor(1, secondsPerPulse: 0), throwsArgumentError);
+      expect(
+        () => Rates.secondsFor(1, secondsPerPulse: 0),
+        throwsArgumentError,
+      );
     });
   });
 
@@ -41,7 +44,15 @@ void main() {
 
   group('KioskState.fromMap', () {
     test('parses a full native snapshot', () {
-      final s = KioskState.fromMap(snapshot(mode: 'production', deviceOwner: true, granted: true, remainingMs: 1000, cloudLink: 'offline'));
+      final s = KioskState.fromMap(
+        snapshot(
+          mode: 'production',
+          deviceOwner: true,
+          granted: true,
+          remainingMs: 1000,
+          cloudLink: 'offline',
+        ),
+      );
       expect(s.loaded, isTrue);
       expect(s.isProduction, isTrue);
       expect(s.accessGranted, isTrue);
@@ -53,13 +64,19 @@ void main() {
     });
 
     test('production without Device Owner is blocked', () {
-      final s = KioskState.fromMap(snapshot(mode: 'production', deviceOwner: false));
+      final s = KioskState.fromMap(
+        snapshot(mode: 'production', deviceOwner: false),
+      );
       expect(s.productionBlocked, isTrue);
       expect(s.isDemo, isFalse);
     });
 
     test('unknown values fall back safely', () {
-      final s = KioskState.fromMap({'mode': 'weird', 'controller': {'link': 'nope'}, 'cloud': {'link': '??'}});
+      final s = KioskState.fromMap({
+        'mode': 'weird',
+        'controller': {'link': 'nope'},
+        'cloud': {'link': '??'},
+      });
       expect(s.mode, KioskMode.unconfigured);
       expect(s.controllerLink, ControllerLink.never);
       expect(s.cloudLink, CloudLink.disabled);
@@ -67,9 +84,20 @@ void main() {
     });
 
     test('recently expired only when denied', () {
-      expect(KioskState.fromMap(snapshot(expiredAgoMs: 1000)).recentlyExpired, isTrue);
-      expect(KioskState.fromMap(snapshot(expiredAgoMs: 500000)).recentlyExpired, isFalse);
-      expect(KioskState.fromMap(snapshot(granted: true, expiredAgoMs: 1000)).recentlyExpired, isFalse);
+      expect(
+        KioskState.fromMap(snapshot(expiredAgoMs: 1000)).recentlyExpired,
+        isTrue,
+      );
+      expect(
+        KioskState.fromMap(snapshot(expiredAgoMs: 500000)).recentlyExpired,
+        isFalse,
+      );
+      expect(
+        KioskState.fromMap(
+          snapshot(granted: true, expiredAgoMs: 1000),
+        ).recentlyExpired,
+        isFalse,
+      );
     });
   });
 }

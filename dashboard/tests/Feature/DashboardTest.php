@@ -105,7 +105,8 @@ it('lets the attendant select a tablet, add and end time, and assign held coins'
 it('renders the live panel with tablet time from the coin box', function () {
     $site = site();
     [$ctl] = enrollDevice($site, 'controller');
-    enrollDevice($site, 'phone', 2);
+    [$phone] = enrollDevice($site, 'phone', 2);
+    $phone->update(['status_json' => ['battery_pct' => 15, 'charging' => false]]);
     $ctl->update([
         'status_json' => ['stations' => ['2' => ['session' => 'running', 'remaining_s' => 754, 'session_no' => 1, 'paired' => true]]],
         'status_reported_at' => now(), 'last_seen_at' => now(),
@@ -115,7 +116,8 @@ it('renders the live panel with tablet time from the coin box', function () {
 
     Livewire::test(SitePanel::class, ['site' => $site])
         ->assertSee('Tablet 2')->assertSee('00:12:3') // 754 s ≈ 00:12:34
-        ->assertSee('₱5')->assertSee('Next coins → this tablet');
+        ->assertSee('₱5')->assertSee('Next coins → this tablet')
+        ->assertSee('15% · low');
 });
 
 it('allows the setup page only with the token and before any admin exists', function () {
@@ -164,4 +166,58 @@ it('sends the content security policy as a header and in the page', function () 
     $res = $this->get('/login')->assertOk();
     expect($res->headers->get('Content-Security-Policy'))->toContain("script-src 'self' 'nonce-")->toContain("frame-ancestors 'none'");
     $res->assertSee('<meta http-equiv="Content-Security-Policy" content="default-src', false);
+});
+
+it('opens admin on a tablet once, on its next heartbeat, and audits it', function () {
+    $site = site();
+    [$phone, $token] = enrollDevice($site, 'phone', 2);
+    $this->actingAs($site->owner);
+
+    Livewire::test(SitePanel::class, ['site' => $site])
+        ->call('openAdmin', 2)->assertSet('flash', fn ($f) => str_contains($f, 'Opening admin on Tablet 2'))
+        ->assertSee('Opening admin…');
+    expect(AuditLog::where('action', 'site.tablet.open_admin')->count())->toBe(1);
+
+    $beat = ['boot_id' => 'cafe0003', 'uptime_ms' => 5];
+    deviceCall($token, 'phone/heartbeat', $beat)->assertOk()->assertJsonStructure(['admin_unlock' => ['id']]);
+    deviceCall($token, 'phone/heartbeat', $beat)->assertOk()->assertJsonMissingPath('admin_unlock');
+});
+
+it('drops an open-admin request the tablet did not pick up in time', function () {
+    $site = site();
+    [$phone, $token] = enrollDevice($site, 'phone', 1);
+    $phone->update(['admin_unlock_id' => 'abcd', 'admin_unlock_expires_at' => now()->subSecond()]);
+    deviceCall($token, 'phone/heartbeat', ['boot_id' => 'cafe0004', 'uptime_ms' => 5])->assertOk()->assertJsonMissingPath('admin_unlock');
+    expect($phone->fresh()->admin_unlock_id)->toBeNull();
+});
+
+it('turns on the 10-tap admin once, on the next heartbeat, and shows when it is on', function () {
+    $site = site();
+    [$phone, $token] = enrollDevice($site, 'phone', 2);
+    $this->actingAs($site->owner);
+
+    Livewire::test(SitePanel::class, ['site' => $site])
+        ->call('enableTaps', 2)->assertSet('flash', fn ($f) => str_contains($f, '10-tap admin on Tablet 2'))
+        ->assertSee('Enabling 10 taps…');
+    expect(AuditLog::where('action', 'site.tablet.enable_taps')->count())->toBe(1);
+
+    $beat = ['boot_id' => 'cafe0005', 'uptime_ms' => 5];
+    deviceCall($token, 'phone/heartbeat', $beat)->assertOk()->assertJsonPath('tap_admin', true);
+    deviceCall($token, 'phone/heartbeat', ['boot_id' => 'cafe0005', 'uptime_ms' => 6, 'tap_admin' => true])->assertOk()->assertJsonMissingPath('tap_admin');
+    Livewire::test(SitePanel::class, ['site' => $site])->assertSee('10-tap admin is on');
+});
+
+it('drops an enable-10-taps request the tablet did not pick up in time', function () {
+    $site = site();
+    [$phone, $token] = enrollDevice($site, 'phone', 1);
+    $phone->update(['tap_admin_expires_at' => now()->subSecond()]);
+    deviceCall($token, 'phone/heartbeat', ['boot_id' => 'cafe0006', 'uptime_ms' => 5])->assertOk()->assertJsonMissingPath('tap_admin');
+    expect($phone->fresh()->tap_admin_expires_at)->toBeNull();
+});
+
+it('refuses to open admin on an empty tablet slot', function () {
+    $site = site();
+    $this->actingAs($site->owner);
+    Livewire::test(SitePanel::class, ['site' => $site])
+        ->call('openAdmin', 3)->assertSet('flash', 'Tablet 3 is not connected to the dashboard.');
 });

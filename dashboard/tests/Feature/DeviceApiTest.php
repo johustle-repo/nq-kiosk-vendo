@@ -153,11 +153,22 @@ it('records the heartbeat and lets an unnumbered tablet adopt its paired number'
     deviceCall($t, 'phone/heartbeat', [
         'boot_id' => 'cafe0001', 'uptime_ms' => 5, 'mode' => 'production', 'device_owner' => true,
         'controller' => ['paired' => true, 'link' => 'ok', 'station' => 2], 'allowed_packages' => ['com.android.chrome', 'bad name'],
+        'battery' => ['pct' => 87, 'charging' => true],
     ])->assertOk()->assertJsonStructure(['config' => ['version', 'allowed_packages', 'local_loss_timeout_s', 'seconds_per_pulse']]);
     $phone->refresh();
     expect($phone->station_no)->toBe(2)
         ->and($phone->status('allowed_packages'))->toBe(['com.android.chrome'])
-        ->and($phone->presence())->toBe('online');
+        ->and($phone->presence())->toBe('online')
+        ->and($phone->status('battery_pct'))->toBe(87)
+        ->and($phone->status('charging'))->toBeTrue();
+});
+
+it('ignores an out-of-range battery level', function () {
+    [$phone, $t] = enrollDevice(site(), 'phone');
+    deviceCall($t, 'phone/heartbeat', ['boot_id' => 'cafe0002', 'uptime_ms' => 5, 'battery' => ['pct' => -1, 'charging' => 'yes']])->assertOk();
+    $phone->refresh();
+    expect($phone->status('battery_pct'))->toBeNull()
+        ->and($phone->status('charging'))->toBeFalse();
 });
 
 it('marks devices offline when they stop reporting', function () {

@@ -40,6 +40,17 @@ Owner**. The app **never** resets the phone or changes ownership on its own.
      → remove accounts / factory reset.
    * `... already several users` → remove extra users (and HiOS "App twin" /
      "Dual app" profiles) or reset.
+   Then, once per tablet:
+   ```
+   # Back/Home/Recents buttons (gesture navigation has no buttons customers can find)
+   adb shell cmd overlay enable-exclusive --category com.android.internal.systemui.navbar.threebutton
+   # Popup guard: closes the "app not available" box when a game ad tries to
+   # open a blocked app (browser, Play Store). The kiosk turns it on itself.
+   adb shell pm grant online.ebnleadgen.vendokiosk android.permission.WRITE_SECURE_SETTINGS
+   adb shell appops set online.ebnleadgen.vendokiosk ACCESS_RESTRICTED_SETTINGS allow
+   ```
+   The `appops` line is needed on Android 13+, which blocks accessibility
+   services of apps not installed from the Play Store ("restricted setting").
 5. Open Vendo Kiosk → create the admin PIN, write down the recovery code →
    *Production kiosk mode*. The app verifies Device Owner itself; if it is not
    Device Owner it refuses and shows these instructions (no silent demo).

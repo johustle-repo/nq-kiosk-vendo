@@ -6,6 +6,7 @@ import android.provider.Settings
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import online.ebnleadgen.vendokiosk.core.ChargeRule
 import online.ebnleadgen.vendokiosk.core.KioskMode
 import online.ebnleadgen.vendokiosk.core.PinLockout
 import java.security.KeyStore
@@ -111,9 +112,55 @@ class KioskStore(context: Context) {
         get() = prefs.getInt("idle_sleep_s", 60)
         set(v) = prefs.edit().putInt("idle_sleep_s", v.coerceIn(0, 3600)).apply()
 
+    /** Seconds the idle logo stays up before the display is switched off (0 = never). */
+    var screenOffS: Int
+        get() = prefs.getInt("screen_off_s", 60)
+        set(v) = prefs.edit().putInt("screen_off_s", v.coerceIn(0, 3600)).apply()
+
     var lockAdbInProduction: Boolean
         get() = prefs.getBoolean("lock_adb", false)
         set(v) = prefs.edit().putBoolean("lock_adb", v).apply()
+
+    /**
+     * Hidden 10-tap admin gesture on a tablet enrolled in the dashboard: off
+     * unless the dashboard turned it on; off again when admin is locked.
+     */
+    var tapAdminEnabled: Boolean
+        get() = prefs.getBoolean("tap_admin", false)
+        set(v) = prefs.edit().putBoolean("tap_admin", v).apply()
+
+    /** Customers may sign in to accounts (Facebook/Google login in games and apps). */
+    var allowAccounts: Boolean
+        get() = prefs.getBoolean("allow_accounts", true)
+        set(v) = prefs.edit().putBoolean("allow_accounts", v).apply()
+
+    /** Turn wireless debugging back on when Android switches it off (KioskPolicy.ensureWirelessAdb). */
+    var keepWirelessAdb: Boolean
+        get() = prefs.getBoolean("keep_wireless_adb", true)
+        set(v) = prefs.edit().putBoolean("keep_wireless_adb", v).apply()
+
+    /** Ad-blocking Private DNS in production (KioskPolicy.applyAdBlock). */
+    var blockAds: Boolean
+        get() = prefs.getBoolean("block_ads", true)
+        set(v) = prefs.edit().putBoolean("block_ads", v).apply()
+
+    // ---- charger relay on the coin box (D6), see ChargeRule
+    var autoChargeEnabled: Boolean
+        get() = prefs.getBoolean("auto_charge", true)
+        set(v) = prefs.edit().putBoolean("auto_charge", v).apply()
+
+    var chargeStartPct: Int
+        get() = prefs.getInt("charge_start_pct", ChargeRule.DEFAULT_START_PCT)
+        set(v) = prefs.edit().putInt("charge_start_pct", v).apply()
+
+    var chargeStopPct: Int
+        get() = prefs.getInt("charge_stop_pct", ChargeRule.DEFAULT_STOP_PCT)
+        set(v) = prefs.edit().putInt("charge_stop_pct", v).apply()
+
+    /** Last decision (kept across restarts so charging continues between the levels). */
+    var chargeRequested: Boolean
+        get() = prefs.getBoolean("charge_requested", false)
+        set(v) = prefs.edit().putBoolean("charge_requested", v).apply()
 
     // ---- secrets (Keystore-encrypted)
     private fun putSecret(name: String, value: ByteArray?) {

@@ -2,6 +2,7 @@
 
 namespace App\Livewire;
 
+use App\Models\AuditLog;
 use App\Models\CoinEvent;
 use App\Models\ControllerCommand;
 use App\Models\Device;
@@ -68,6 +69,46 @@ class SitePanel extends Component
     {
         $this->run(fn (Site $s, ControllerChannel $c) => $c->endSession($s, $station, auth()->user(), request()->ip()),
             "Ending Tablet {$station}'s session…");
+    }
+
+    /**
+     * Opens the admin screen on a tablet without its PIN (the dashboard login
+     * is the proof). The tablet picks it up on its next heartbeat (~30 s).
+     */
+    public function openAdmin(int $station): void
+    {
+        $site = $this->site();
+        $phone = $station >= 1 && $station <= Site::MAX_STATIONS ? $site->phoneForStation($station) : null;
+        if ($phone === null) {
+            $this->flash = "Tablet {$station} is not connected to the dashboard.";
+
+            return;
+        }
+        $phone->update([
+            'admin_unlock_id' => bin2hex(random_bytes(8)),
+            'admin_unlock_expires_at' => now()->addSeconds(Device::ADMIN_UNLOCK_TTL_S),
+        ]);
+        AuditLog::record('site.tablet.open_admin', auth()->id(), $site->id, $phone->id, ['station' => $station], request()->ip());
+        $this->flash = "Opening admin on Tablet {$station}. It appears on the tablet within about 30 seconds.";
+    }
+
+    /**
+     * Turns the hidden 10-tap admin gesture back on for a tablet enrolled here
+     * (the PIN is still asked). It goes off again when the tablet's
+     * administrator locks the admin screen.
+     */
+    public function enableTaps(int $station): void
+    {
+        $site = $this->site();
+        $phone = $station >= 1 && $station <= Site::MAX_STATIONS ? $site->phoneForStation($station) : null;
+        if ($phone === null) {
+            $this->flash = "Tablet {$station} is not connected to the dashboard.";
+
+            return;
+        }
+        $phone->update(['tap_admin_expires_at' => now()->addSeconds(Device::TAP_ADMIN_TTL_S)]);
+        AuditLog::record('site.tablet.enable_taps', auth()->id(), $site->id, $phone->id, ['station' => $station], request()->ip());
+        $this->flash = "Turning on the 10-tap admin on Tablet {$station} (within about 30 seconds). It turns off again when admin is locked on the tablet.";
     }
 
     public function assignHeld(int $station): void
@@ -148,6 +189,11 @@ class SitePanel extends Component
                 'mode' => $phone?->status('mode'),
                 'locked' => $phone?->status('lock_task') === 'locked',
                 'link' => $phone?->status('controller_link'),
+                'battery' => $phone?->status('battery_pct'),
+                'charging' => $phone?->status('charging') === true,
+                'adminPending' => $phone?->adminUnlockPending() === true,
+                'tapsPending' => $phone?->tapAdminPending() === true,
+                'tapsOn' => $phone?->status('tap_admin') === true,
                 'paired' => (bool) ($st['paired'] ?? false),
                 'usable' => $phone !== null || (bool) ($st['paired'] ?? false),
                 'remaining' => $remaining,

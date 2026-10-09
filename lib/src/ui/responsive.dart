@@ -63,8 +63,8 @@ class Responsive {
       ? 112
       : switch (screenClass) {
           ScreenClass.compact => 104,
-          ScreenClass.medium => 140,
-          ScreenClass.expanded => 180,
+          ScreenClass.medium => 120,
+          ScreenClass.expanded => 136,
         };
 
   /// Tile width / height: shorter tiles where vertical space is scarce.
@@ -80,7 +80,7 @@ class Responsive {
   /// Width of the timer side panel in two-column layouts.
   double get sidePanelWidth => isLandscapePhone
       ? math.min(width * 0.42, 340)
-      : math.min(width * 0.36, 440);
+      : math.min(width * 0.30, 360);
 }
 
 /// Caps very large system font settings so the kiosk layout cannot break,

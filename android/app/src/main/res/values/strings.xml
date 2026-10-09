@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="popup_guard_label">VeNdO Kiosk popup guard</string>
+    <string name="popup_guard_description">Closes the system \"app not available\" box that appears when a game ad tries to open a blocked app (browser, Play Store), so the customer stays in the game. Reads no screen content.</string>
+</resources>

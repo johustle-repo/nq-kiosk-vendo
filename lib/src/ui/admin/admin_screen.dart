@@ -75,7 +75,12 @@ class _AdminScreenState extends State<AdminScreen> {
                 titleSpacing: wide ? 24 : 16,
                 title: Row(
                   children: [
-                    Image.asset(kCoinAsset, width: 28, height: 28, excludeFromSemantics: true),
+                    Image.asset(
+                      kCoinAsset,
+                      width: 28,
+                      height: 28,
+                      excludeFromSemantics: true,
+                    ),
                     const SizedBox(width: 10),
                     const Flexible(
                       child: Text(
@@ -307,7 +312,9 @@ class _OverviewPage extends StatelessWidget {
         icon: Icons.apps,
         label: 'Allowed apps',
         value: '${s.allowedPackages.length}',
-        color: s.allowedPackages.isEmpty ? KioskPalette.warn : KioskPalette.text,
+        color: s.allowedPackages.isEmpty
+            ? KioskPalette.warn
+            : KioskPalette.text,
       ),
     ];
 
@@ -921,13 +928,18 @@ class _CoinBoxPageState extends State<_CoinBoxPage> {
           children: [
             InfoRow('Controller', s.controllerDeviceId, mono: true),
             InfoRow('Address', s.controllerAddress, mono: true),
-            InfoRow('This tablet', s.controllerPaired ? 'Tablet ${s.controllerStation}' : null),
+            InfoRow(
+              'This tablet',
+              s.controllerPaired ? 'Tablet ${s.controllerStation}' : null,
+            ),
             InfoRow(
               'Next coins go to',
               !s.controllerPaired
                   ? null
                   : s.selectedStation == 0
-                  ? (s.heldPulses > 0 ? 'Nobody (₱${s.heldPulses} held)' : 'Nobody')
+                  ? (s.heldPulses > 0
+                        ? 'Nobody (₱${s.heldPulses} held)'
+                        : 'Nobody')
                   : 'Tablet ${s.selectedStation} (${s.selectedTtlS} s)',
             ),
             InfoRow(
@@ -975,7 +987,8 @@ class _CoinBoxPageState extends State<_CoinBoxPage> {
               initialValue: _station,
               decoration: const InputDecoration(labelText: 'Tablet number'),
               items: [
-                for (var n = 1; n <= 4; n++) DropdownMenuItem(value: n, child: Text('Tablet $n')),
+                for (var n = 1; n <= 4; n++)
+                  DropdownMenuItem(value: n, child: Text('Tablet $n')),
               ],
               onChanged: (v) => setState(() => _station = v ?? 1),
             ),
@@ -1025,7 +1038,11 @@ class _CoinBoxPageState extends State<_CoinBoxPage> {
                             _code.clear();
                             if (context.mounted) {
                               ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text('Paired with $id as Tablet $_station')),
+                                SnackBar(
+                                  content: Text(
+                                    'Paired with $id as Tablet $_station',
+                                  ),
+                                ),
                               );
                             }
                           });
@@ -1084,6 +1101,7 @@ class _CoinBoxPageState extends State<_CoinBoxPage> {
             ),
           ],
         ),
+        _ChargeSection(state: s, bridge: b),
         if (s.controllerPaired)
           AdminSection(
             icon: Icons.warning_amber_rounded,
@@ -1148,6 +1166,123 @@ class _CoinBoxPageState extends State<_CoinBoxPage> {
 }
 
 // ======================================================================= Cloud
+
+/// Charger relay on the coin box (D6): the tablet asks for it when its
+/// battery drops below the start level and releases it at the stop level.
+class _ChargeSection extends StatelessWidget {
+  const _ChargeSection({required this.state, required this.bridge});
+
+  final KioskState state;
+  final KioskBridge bridge;
+
+  static const _starts = [10, 15, 20, 25, 30, 40, 50];
+  static const _stops = [60, 70, 80, 90, 100];
+
+  @override
+  Widget build(BuildContext context) {
+    final s = state;
+    final b = bridge;
+    Future<void> save({bool? enabled, int? start, int? stop}) => adminRun(
+      context,
+      () => b.setAutoCharge(
+        enabled: enabled ?? s.autoCharge,
+        startPct: start ?? s.chargeStartPct,
+        stopPct: stop ?? s.chargeStopPct,
+      ),
+      success: 'Saved',
+    );
+    final relay = switch (s.chargeRelayOn) {
+      true => 'ON',
+      false => 'OFF',
+      null =>
+        s.controllerPaired ? 'Waiting for the coin box' : 'Coin box not paired',
+    };
+    final err = s.chargeLastError == 'coin_box_outdated'
+        ? 'Coin box firmware is older than 2.2.0'
+        : s.chargeLastError;
+    return AdminSection(
+      icon: Icons.battery_charging_full,
+      title: 'Charger relay (D6)',
+      trailing: s.chargeRelayOn == true
+          ? const StatusBadge('CHARGING', color: KioskPalette.ok)
+          : null,
+      description:
+          'The coin box switches its D6 relay on when this tablet\'s battery drops below the start '
+          'level and off again when it reaches the stop level. Wire the tablet charger through the relay.',
+      children: [
+        SwitchListTile(
+          key: const Key('auto-charge'),
+          contentPadding: EdgeInsets.zero,
+          value: s.autoCharge,
+          title: const Text('Charge automatically'),
+          onChanged: (v) => save(enabled: v),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: DropdownButtonFormField<int>(
+                key: const Key('charge-start'),
+                isExpanded: true,
+                initialValue: _starts.contains(s.chargeStartPct)
+                    ? s.chargeStartPct
+                    : 20,
+                decoration: const InputDecoration(labelText: 'Start below'),
+                items: [
+                  for (final p in _starts)
+                    DropdownMenuItem(value: p, child: Text('$p%')),
+                ],
+                onChanged: s.autoCharge
+                    ? (v) {
+                        if (v != null) save(start: v);
+                      }
+                    : null,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: DropdownButtonFormField<int>(
+                key: const Key('charge-stop'),
+                isExpanded: true,
+                initialValue: _stops.contains(s.chargeStopPct)
+                    ? s.chargeStopPct
+                    : 90,
+                decoration: const InputDecoration(labelText: 'Stop at'),
+                items: [
+                  for (final p in _stops)
+                    DropdownMenuItem(value: p, child: Text('$p%')),
+                ],
+                onChanged: s.autoCharge
+                    ? (v) {
+                        if (v != null) save(stop: v);
+                      }
+                    : null,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        InfoRow(
+          'Battery',
+          s.batteryPct < 0
+              ? null
+              : '${s.batteryPct}%${s.batteryCharging ? ' · charging' : ''}',
+          valueColor: s.batteryPct >= 0 && s.batteryPct < s.chargeStartPct
+              ? KioskPalette.warn
+              : null,
+        ),
+        InfoRow(
+          'Relay',
+          relay,
+          valueColor: s.chargeRelayOn == true ? KioskPalette.ok : null,
+          last: err == null,
+        ),
+        if (err != null)
+          InfoRow('Last error', err, valueColor: KioskPalette.warn, last: true),
+      ],
+    );
+  }
+}
 
 class _CloudPage extends StatefulWidget {
   const _CloudPage({required this.controller});
@@ -1337,8 +1472,9 @@ class _SystemPageState extends State<_SystemPage> {
           icon: Icons.brightness_low_outlined,
           title: 'Screen',
           description:
-              'With no paid time, the kiosk logo is shown after this long without touches. '
-              'The screen stays on; a touch returns to the payment screen and a coin starts a session.',
+              'With no paid time, the kiosk logo is shown after this long without touches, '
+              'then the display switches off. A touch on the logo returns to the payment screen; '
+              'a coin or the power button turns the display back on.',
           children: [
             DropdownButtonFormField<int>(
               key: const Key('idle-sleep'),
@@ -1346,7 +1482,9 @@ class _SystemPageState extends State<_SystemPage> {
               initialValue: const [0, 30, 60, 120, 300].contains(s.idleSleepS)
                   ? s.idleSleepS
                   : 60,
-              decoration: const InputDecoration(labelText: 'Show logo when idle'),
+              decoration: const InputDecoration(
+                labelText: 'Show logo when idle',
+              ),
               items: const [
                 DropdownMenuItem(value: 0, child: Text('Never')),
                 DropdownMenuItem(value: 30, child: Text('After 30 seconds')),
@@ -1357,6 +1495,31 @@ class _SystemPageState extends State<_SystemPage> {
               onChanged: (v) {
                 if (v != null) {
                   adminRun(context, () => b.setIdleSleep(v), success: 'Saved');
+                }
+              },
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<int>(
+              key: const Key('screen-off'),
+              isExpanded: true,
+              initialValue:
+                  const [0, 30, 60, 120, 300, 600].contains(s.screenOffS)
+                  ? s.screenOffS
+                  : 60,
+              decoration: const InputDecoration(
+                labelText: 'Turn the screen off',
+              ),
+              items: const [
+                DropdownMenuItem(value: 0, child: Text('Never (logo stays on)')),
+                DropdownMenuItem(value: 30, child: Text('30 seconds after the logo')),
+                DropdownMenuItem(value: 60, child: Text('1 minute after the logo')),
+                DropdownMenuItem(value: 120, child: Text('2 minutes after the logo')),
+                DropdownMenuItem(value: 300, child: Text('5 minutes after the logo')),
+                DropdownMenuItem(value: 600, child: Text('10 minutes after the logo')),
+              ],
+              onChanged: (v) {
+                if (v != null) {
+                  adminRun(context, () => b.setScreenOff(v), success: 'Saved');
                 }
               },
             ),
@@ -1396,6 +1559,57 @@ class _SystemPageState extends State<_SystemPage> {
           ],
         ),
         AdminSection(
+          icon: Icons.account_circle_outlined,
+          title: 'Game and social logins',
+          children: [
+            SwitchListTile(
+              key: const Key('allow-accounts'),
+              contentPadding: EdgeInsets.zero,
+              value: s.allowAccounts,
+              title: const Text('Allow Facebook and Google sign-in'),
+              subtitle: const Text(
+                'Lets customers log in to games and social apps (Facebook, Google Play Games, TikTok). '
+                'A login can stay on the tablet for the next customer, so remind customers to log out. '
+                'Settings and app stores stay blocked either way.',
+                style: TextStyle(color: KioskPalette.textMuted),
+              ),
+              onChanged: (v) => adminRun(context, () => b.setAllowAccounts(v)),
+            ),
+          ],
+        ),
+        AdminSection(
+          icon: Icons.block,
+          title: 'Ad blocking',
+          trailing: s.isProduction
+              ? StatusBadge(
+                  s.adBlockActive ? 'ON' : 'OFF',
+                  color: s.adBlockActive ? KioskPalette.ok : KioskPalette.warn,
+                )
+              : null,
+          children: [
+            SwitchListTile(
+              key: const Key('block-ads'),
+              contentPadding: EdgeInsets.zero,
+              value: s.blockAds,
+              title: const Text('Block ads in games and apps'),
+              subtitle: const Text(
+                'Production only. Uses an ad-blocking DNS (AdGuard) for the whole tablet, so most '
+                'game ads never load. Games that need a video ad for a reward may skip the reward.',
+                style: TextStyle(color: KioskPalette.textMuted),
+              ),
+              onChanged: (v) => adminRun(context, () => b.setBlockAds(v)),
+            ),
+            if (s.adBlockProblem != null) ...[
+              const SizedBox(height: 8),
+              AdminNote(
+                s.adBlockProblem!,
+                icon: Icons.warning_amber_rounded,
+                color: KioskPalette.warn,
+              ),
+            ],
+          ],
+        ),
+        AdminSection(
           icon: Icons.usb,
           title: 'USB debugging',
           children: [
@@ -1408,6 +1622,20 @@ class _SystemPageState extends State<_SystemPage> {
                 style: TextStyle(color: KioskPalette.textMuted),
               ),
               onChanged: (v) => adminRun(context, () => b.setLockAdb(v)),
+            ),
+            SwitchListTile(
+              key: const Key('keep-wireless-adb'),
+              contentPadding: EdgeInsets.zero,
+              value: s.keepWirelessAdb,
+              title: const Text('Keep wireless debugging on'),
+              subtitle: Text(
+                'Android switches wireless debugging off by itself (screen off, restarts). '
+                'This turns it back on within 30 seconds so the app can be updated remotely. '
+                'Only computers already paired can connect. '
+                'Now: ${s.wirelessAdbOn ? 'on' : 'off'}.',
+                style: const TextStyle(color: KioskPalette.textMuted),
+              ),
+              onChanged: (v) => adminRun(context, () => b.setKeepWirelessAdb(v)),
             ),
           ],
         ),

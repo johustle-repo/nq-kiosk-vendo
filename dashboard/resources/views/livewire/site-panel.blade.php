@@ -94,6 +94,8 @@
                     <dd class="text-right font-semibold">{{ $t['mode'] ? ucfirst($t['mode']) : '—' }}@if ($t['locked']) · locked @endif</dd>
                     <dt class="text-zinc-500">Coin box link</dt>
                     <dd class="text-right font-semibold">{{ $t['paired'] ? ($t['link'] ?? 'paired') : 'not paired' }}</dd>
+                    <dt class="text-zinc-500">Battery</dt>
+                    <dd @class(['text-right font-semibold', 'text-red-600' => $t['battery'] !== null && $t['battery'] <= 20 && ! $t['charging']])>{{ $t['battery'] === null ? '—' : $t['battery'].'%'.($t['charging'] ? ' · charging' : ($t['battery'] <= 20 ? ' · low' : '')) }}</dd>
                     <dt class="text-zinc-500">Today</dt>
                     <dd class="text-right font-bold text-coin">₱{{ number_format($t['pesosToday']) }}</dd>
                 </dl>
@@ -117,6 +119,14 @@
                         @endforeach
                     </div>
                     <button wire:click="endSession({{ $t['n'] }})" wire:confirm="End Tablet {{ $t['n'] }}'s session now? The customer loses the remaining time." class="btn-danger w-full py-1.5" @disabled(! $t['remaining'])>End session</button>
+                    @if ($t['phone'])
+                        <button wire:click="openAdmin({{ $t['n'] }})" wire:confirm="Open the admin screen on Tablet {{ $t['n'] }} without its PIN? Anyone at the tablet gets admin for 5 minutes." class="btn-outline w-full py-1.5" @disabled($t['adminPending'])>{{ $t['adminPending'] ? 'Opening admin…' : 'Open admin' }}</button>
+                        @if ($t['tapsOn'])
+                            <p class="text-center text-xs text-slate-500">10-tap admin is on (off when admin is locked on the tablet)</p>
+                        @else
+                            <button wire:click="enableTaps({{ $t['n'] }})" wire:confirm="Turn on the 10-tap admin gesture on Tablet {{ $t['n'] }}? The PIN is still required. It turns off when admin is locked on the tablet." class="btn-outline w-full py-1.5" @disabled($t['tapsPending'])>{{ $t['tapsPending'] ? 'Enabling 10 taps…' : 'Enable 10 taps' }}</button>
+                        @endif
+                    @endif
                 </div>
             </article>
         @endforeach

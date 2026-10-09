@@ -190,14 +190,20 @@ class PreviewKioskBridge implements KioskBridge {
   Future<void> requestNotificationPermission() async {}
 
   @override
-  Future<String> pairController(String address, String code, int station) async =>
-      _unsupported();
+  Future<String> pairController(
+    String address,
+    String code,
+    int station,
+  ) async => _unsupported();
 
   @override
   Future<void> setControllerAddress(String address) async => _unsupported();
 
   @override
   Future<void> unpairController() async => _unsupported();
+
+  @override
+  Future<int> claimCoinBox() async => _unsupported();
 
   @override
   Future<String> enrollCloud(String code) async => _unsupported();
@@ -222,6 +228,28 @@ class PreviewKioskBridge implements KioskBridge {
 
   @override
   Future<void> setIdleSleep(int seconds) async => _unsupported();
+
+  @override
+  Future<void> sleepScreen() async {}
+
+  @override
+  Future<void> setScreenOff(int seconds) async => _unsupported();
+
+  @override
+  Future<void> setBlockAds(bool enabled) async => _unsupported();
+
+  @override
+  Future<void> setKeepWirelessAdb(bool enabled) async => _unsupported();
+
+  @override
+  Future<void> setAllowAccounts(bool allow) async => _unsupported();
+
+  @override
+  Future<void> setAutoCharge({
+    required bool enabled,
+    required int startPct,
+    required int stopPct,
+  }) async => _unsupported();
 
   @override
   Future<void> openLockScreenSettings() async => _unsupported();

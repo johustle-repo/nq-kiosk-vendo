@@ -4,12 +4,15 @@ import '../kiosk_controller.dart';
 import '../model/kiosk_state.dart';
 import 'responsive.dart';
 import 'theme.dart';
+import 'coin_claim.dart';
 import 'widgets.dart';
 
 /// Shown whenever there is no paid time (or access is blocked).
 ///
-/// Phone portrait: one column (hero, timer, rates).
-/// Phone landscape / tablet landscape: two columns (hero + timer | rates).
+/// Top bar (logo, tablet, clock) over:
+/// * landscape tablets and phones: the dark countdown panel on the left,
+///   rates and "how it works" on the right;
+/// * portrait: the same pieces stacked in one column.
 class PaymentScreen extends StatelessWidget {
   const PaymentScreen({
     super.key,
@@ -23,7 +26,6 @@ class PaymentScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = controller.state;
-    final t = Theme.of(context).textTheme;
     final blocked = s.productionBlocked;
     final reason = s.denyReason;
     final problem =
@@ -47,7 +49,7 @@ class PaymentScreen extends StatelessWidget {
           text: s.expiredReason == 'controller_lost'
               ? 'Session paused: the coin controller stopped responding.'
               : 'Time expired. Insert a coin to continue.',
-          background: KioskPalette.danger.withValues(alpha: 0.14),
+          background: KioskPalette.danger.withValues(alpha: 0.10),
           foreground: KioskPalette.danger,
         ),
     ];
@@ -55,83 +57,75 @@ class PaymentScreen extends StatelessWidget {
     // Production with a paired coin box: show which tablet this is and whether
     // the attendant has pointed the coin box at it.
     final shared = !s.isDemo && s.controllerPaired;
+    final ready = shared && s.coinBoxReadyForMe;
 
-    Widget hero(Responsive r) => Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // Timer first (right under the logo); it doubles as the hidden admin
-        // entry (tap it 7 times quickly).
-        AdminEntry(
-          onTriggered: onAdmin,
-          child: TimePill(
-            remainingMs: s.remainingMs,
-            large: !r.isCompact && !r.isLandscapePhone,
-          ),
-        ),
-        SizedBox(height: r.isLandscapePhone ? 12 : (r.isCompact ? 20 : 28)),
-        if (problem) ...[
-          Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 640),
-              child: StatusNotice(
-                key: blocked ? const Key('blocked-banner') : null,
-                icon: noticeIcon,
-                title: noticeTitle,
-                detail: noticeDetail,
-                color: noticeColor,
-                large: !r.isCompact && !r.isLandscapePhone,
-              ),
+    Widget hero(Responsive r, {required bool roomy}) => HeroPanel(
+      radius: roomy ? 32 : 26,
+      padding: EdgeInsets.symmetric(
+        horizontal: roomy ? 36 : 20,
+        vertical: roomy ? 32 : (r.isLandscapePhone ? 18 : 24),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // The countdown doubles as the hidden admin entry (tap it 10 times quickly).
+          AdminEntry(
+            onTriggered: onAdmin,
+            child: HeroCountdown(
+              remainingMs: s.remainingMs,
+              size: roomy ? 92 : (r.isLandscapePhone ? 48 : 60),
+              large: roomy,
             ),
           ),
-        ] else ...[
-          // Shared coin box: the attendant chooses which tablet gets the next coins.
-          if (shared) ...[
-            Center(child: TabletBadge(station: s.controllerStation, ready: s.coinBoxReadyForMe)),
-            SizedBox(height: r.isCompact ? 12 : 18),
-          ],
-          Center(
-            child: InsertCoinButton(large: !r.isCompact && !r.isLandscapePhone),
-          ),
-          if (!r.isLandscapePhone) ...[
-            SizedBox(height: r.isCompact ? 10 : 16),
+          SizedBox(height: roomy ? 28 : 18),
+          if (problem)
+            StatusNotice(
+              key: blocked ? const Key('blocked-banner') : null,
+              icon: noticeIcon,
+              title: noticeTitle,
+              detail: noticeDetail,
+              color: noticeColor,
+              large: roomy,
+              onInk: true,
+            )
+          else ...[
+            Center(
+              child: InsertCoinButton(
+                large: roomy,
+                onPressed: shared
+                    ? () => claimCoinBox(context, controller)
+                    : null,
+              ),
+            ),
+            SizedBox(height: roomy ? 16 : 12),
             Text(
               !shared
                   ? 'Drop a coin in the slot. Your time starts right away.'
-                  : s.coinBoxReadyForMe
+                  : ready
                   ? 'The coin box is ready for Tablet ${s.controllerStation}. Insert your coins now.'
-                  : 'Ask the staff to select Tablet ${s.controllerStation}, then insert your coins.',
+                  : 'Tap "Insert coin to start", then insert your coins.',
               key: const Key('payment-hint'),
               textAlign: TextAlign.center,
-              style: (r.isCompact ? t.bodyLarge : t.titleMedium)?.copyWith(
-                color: shared && s.coinBoxReadyForMe ? KioskPalette.accent : KioskPalette.textMuted,
-                fontWeight: shared && s.coinBoxReadyForMe ? FontWeight.w700 : null,
+              style: TextStyle(
+                fontSize: roomy ? 18 : 15,
+                height: 1.35,
+                color: ready ? KioskPalette.mint : KioskPalette.onInkMuted,
+                fontWeight: ready ? FontWeight.w700 : FontWeight.w500,
               ),
             ),
           ],
         ],
-      ],
+      ),
     );
 
-    Widget rates(Responsive r) => Column(
+    Widget side({required bool roomy, required bool showSteps}) => Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Tablets: a centred strip of peso cards under the timer.
-        if (!r.isCompact && !r.isLandscapePhone)
-          RateStrip(secondsPerPulse: s.secondsPerPulse)
-        else
-          RateTable(secondsPerPulse: s.secondsPerPulse),
-        if (s.isDemo) ...[
-          const SizedBox(height: 24),
-          SimulatedCoinButtons(
-            secondsPerPulse: s.secondsPerPulse,
-            onCoin: (p) =>
-                controller.bridge.simulateCoin(p).catchError((Object e) {
-                  if (context.mounted) showError(context, e);
-                }),
-          ),
-        ],
+        RateTable(secondsPerPulse: s.secondsPerPulse, large: roomy),
+        if (showSteps) ...[SizedBox(height: 14), HowItWorks(large: roomy)],
       ],
     );
 
@@ -145,62 +139,91 @@ class PaymentScreen extends StatelessWidget {
               child: LayoutBuilder(
                 builder: (context, box) {
                   final r = Responsive.of(box);
-                  // Only landscape phones are too short to stack; everything
-                  // else (phones, tablets) is one centred column.
-                  final content = r.isLandscapePhone
-                      ? Row(
-                          // Top-align so the timer never sits below the fold.
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(child: hero(r)),
-                            SizedBox(width: r.gutter),
-                            Expanded(child: rates(r)),
-                          ],
+                  final twoPane =
+                      r.isLandscapePhone ||
+                      (r.width >= 840 && r.width > r.height);
+                  final roomy = !r.isCompact && !r.isLandscapePhone;
+                  final gap = r.isLandscapePhone ? 14.0 : (roomy ? 28.0 : 16.0);
+                  final body = twoPane
+                      ? IntrinsicHeight(
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Expanded(flex: 6, child: hero(r, roomy: roomy)),
+                              SizedBox(width: gap),
+                              Expanded(
+                                flex: 5,
+                                child: side(
+                                  roomy: roomy,
+                                  showSteps: !r.isLandscapePhone,
+                                ),
+                              ),
+                            ],
+                          ),
                         )
                       : Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            hero(r),
-                            SizedBox(height: r.isCompact ? 24 : 36),
-                            rates(r),
+                            hero(r, roomy: roomy),
+                            SizedBox(height: gap),
+                            side(roomy: roomy, showSteps: true),
                           ],
                         );
+                  final topPad = r.isLandscapePhone ? 10.0 : 14.0;
                   return SingleChildScrollView(
-                    padding: EdgeInsets.symmetric(
-                      horizontal: r.gutter,
-                      vertical: r.isLandscapePhone ? 10 : 18,
+                    padding: EdgeInsets.fromLTRB(
+                      r.gutter,
+                      topPad,
+                      r.gutter,
+                      24,
                     ),
                     child: ConstrainedBox(
                       constraints: BoxConstraints(
-                        minHeight:
-                            box.maxHeight - (r.isLandscapePhone ? 20 : 36),
+                        minHeight: box.maxHeight - topPad - 24,
                       ),
                       child: Center(
                         child: ConstrainedBox(
-                          // Keep the single column comfortably narrow.
                           constraints: BoxConstraints(
-                            maxWidth: r.isLandscapePhone
-                                ? r.maxContentWidth
-                                : (r.isCompact ? 640 : 860),
+                            maxWidth: twoPane
+                                ? 1240
+                                : (r.isCompact ? 560 : 680),
                           ),
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
-                              if (!r.isLandscapePhone) ...[
-                                Center(
-                                  child: BrandLogo(
-                                    plate: false,
-                                    height: r.isCompact ? 72 : 120,
-                                  ),
-                                ),
-                                SizedBox(height: r.isCompact ? 20 : 32),
-                              ],
-                              content,
+                              KioskTopBar(
+                                compact: !roomy,
+                                trailing: shared
+                                    ? TabletBadge(
+                                        station: s.controllerStation,
+                                        ready: ready,
+                                      )
+                                    : null,
+                              ),
+                              SizedBox(
+                                height: r.isLandscapePhone
+                                    ? 10
+                                    : (roomy ? 18 : 16),
+                              ),
+                              body,
                               // Warnings (time expired, ...) sit under the content.
                               for (final b in banners) ...[
-                                const SizedBox(height: 20),
+                                const SizedBox(height: 16),
                                 b,
+                              ],
+                              if (s.isDemo) ...[
+                                const SizedBox(height: 20),
+                                SimulatedCoinButtons(
+                                  secondsPerPulse: s.secondsPerPulse,
+                                  onCoin: (p) => controller.bridge
+                                      .simulateCoin(p)
+                                      .catchError((Object e) {
+                                        if (context.mounted) {
+                                          showError(context, e);
+                                        }
+                                      }),
+                                ),
                               ],
                             ],
                           ),

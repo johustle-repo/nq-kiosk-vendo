@@ -46,9 +46,26 @@ class KioskState {
     this.lockAdb = false,
     this.isDefaultHome = false,
     this.idleSleepS = 60,
+    this.screenOffS = 60,
+    this.blockAds = true,
+    this.keepWirelessAdb = true,
+    this.tapAdmin = false,
+    this.allowAccounts = true,
+    this.wirelessAdbOn = false,
+    this.adBlockActive = false,
+    this.adBlockProblem,
+    this.autoCharge = true,
+    this.chargeStartPct = 20,
+    this.chargeStopPct = 90,
+    this.batteryPct = -1,
+    this.batteryCharging = false,
+    this.chargeRequested = false,
+    this.chargeRelayOn,
+    this.chargeLastError,
     this.screenLockSecure = false,
     this.hasPin = false,
     this.adminUnlocked = false,
+    this.adminOpenSeq = 0,
     this.pinLockoutMs = 0,
     this.demoRemainingMs = 0,
     this.loaded = false,
@@ -80,7 +97,8 @@ class KioskState {
   final int heldPulses;
 
   /// The attendant selected this tablet: coins inserted now go here.
-  bool get coinBoxReadyForMe => selectedStation != 0 && selectedStation == controllerStation;
+  bool get coinBoxReadyForMe =>
+      selectedStation != 0 && selectedStation == controllerStation;
   final ControllerLink controllerLink;
   final int? controllerLastOkAgoMs;
   final String? controllerLastError;
@@ -106,10 +124,48 @@ class KioskState {
   /// Seconds without paid time and touches before the screen sleeps (0 = never).
   final int idleSleepS;
 
+  /// Seconds the idle logo stays up before the display is switched off (0 = never).
+  final int screenOffS;
+
+  /// Ad-blocking Private DNS in production (setting / applied / last problem).
+  final bool blockAds;
+
+  /// Turn wireless debugging back on when Android switches it off / is it on now.
+  final bool keepWirelessAdb;
+
+  /// The dashboard turned the 10-tap admin gesture on (until admin is locked).
+  final bool tapAdmin;
+
+  /// Customers may sign in to accounts (Facebook/Google login in games and apps).
+  final bool allowAccounts;
+  final bool wirelessAdbOn;
+  final bool adBlockActive;
+  final String? adBlockProblem;
+
+  /// Charger relay on the coin box (D6): on below [chargeStartPct], off at
+  /// [chargeStopPct].
+  final bool autoCharge;
+  final int chargeStartPct;
+  final int chargeStopPct;
+
+  /// This tablet's battery (0-100, -1 unknown).
+  final int batteryPct;
+  final bool batteryCharging;
+
+  /// The tablet currently asks the coin box for the charger relay.
+  final bool chargeRequested;
+
+  /// Relay state reported by the coin box (null until it answered).
+  final bool? chargeRelayOn;
+  final String? chargeLastError;
+
   /// The phone has a PIN/pattern/password lock screen.
   final bool screenLockSecure;
   final bool hasPin;
   final bool adminUnlocked;
+
+  /// Increases each time the dashboard asks to open admin on this tablet.
+  final int adminOpenSeq;
   final int pinLockoutMs;
   final int demoRemainingMs;
 
@@ -160,6 +216,7 @@ class KioskState {
     final cloud = sub('cloud');
     final settings = sub('settings');
     final admin = sub('admin');
+    final charge = sub('charge');
     return KioskState(
       loaded: true,
       preview: m['preview'] == true,
@@ -203,9 +260,26 @@ class KioskState {
       lockAdb: settings['lockAdb'] == true,
       isDefaultHome: settings['isDefaultHome'] == true,
       idleSleepS: _int(settings['idleSleepS']) ?? 60,
+      screenOffS: _int(settings['screenOffS']) ?? 60,
+      blockAds: settings['blockAds'] != false,
+      keepWirelessAdb: settings['keepWirelessAdb'] != false,
+      tapAdmin: settings['tapAdmin'] == true,
+      allowAccounts: settings['allowAccounts'] != false,
+      wirelessAdbOn: settings['wirelessAdbOn'] == true,
+      adBlockActive: settings['adBlockActive'] == true,
+      adBlockProblem: settings['adBlockProblem'] as String?,
+      autoCharge: settings['autoCharge'] != false,
+      chargeStartPct: _int(settings['chargeStartPct']) ?? 20,
+      chargeStopPct: _int(settings['chargeStopPct']) ?? 90,
+      batteryPct: _int(charge['batteryPct']) ?? -1,
+      batteryCharging: charge['charging'] == true,
+      chargeRequested: charge['requested'] == true,
+      chargeRelayOn: charge['relayOn'] as bool?,
+      chargeLastError: charge['lastError'] as String?,
       screenLockSecure: settings['screenLockSecure'] == true,
       hasPin: admin['hasPin'] == true,
       adminUnlocked: admin['unlocked'] == true,
+      adminOpenSeq: _int(admin['openSeq']) ?? 0,
       pinLockoutMs: _int(admin['lockoutMs']) ?? 0,
       demoRemainingMs: _int(m['demoRemainingMs']) ?? 0,
     );

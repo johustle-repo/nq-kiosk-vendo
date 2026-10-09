@@ -40,7 +40,21 @@ class KioskDeviceAdminReceiver : DeviceAdminReceiver() {
  */
 class KioskPolicy(private val context: Context) {
     private companion object {
+        /** Settings.Global.ADB_WIFI_ENABLED (hidden constant). */
+        const val ADB_WIFI_ENABLED = "adb_wifi_enabled"
+
+        /** AdGuard DNS (default server): blocks ad and tracker domains. */
+        const val AD_BLOCK_DNS_HOST = "dns.adguard-dns.com"
         const val GMS = "com.google.android.gms"
+
+        /** See sessionHelpers. */
+        val SESSION_HELPERS = listOf(
+            "com.android.chrome",
+            "com.facebook.katana",
+            "com.facebook.lite",
+            "com.google.android.play.games",
+            "com.google.android.gsf",
+        )
     }
 
     private val dpm = context.getSystemService(DevicePolicyManager::class.java)
@@ -60,9 +74,8 @@ class KioskPolicy(private val context: Context) {
         add(UserManager.DISALLOW_CONFIG_DATE_TIME)
         add(UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
         add(UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES_GLOBALLY)
-        // A customer's Google (or other) account would stay on the shared kiosk
-        // for the next customer, so sign-in is refused with an admin message.
-        add(UserManager.DISALLOW_MODIFY_ACCOUNTS)
+        // DISALLOW_MODIFY_ACCOUNTS is an admin setting (applyBaseline): it also
+        // breaks Facebook and Google sign-in inside games and social apps.
     }
 
     fun isDeviceOwner(): Boolean = dpm.isDeviceOwnerApp(pkg)
@@ -82,7 +95,7 @@ class KioskPolicy(private val context: Context) {
      * Baseline kiosk policies (idempotent). Returns human-readable problems;
      * an empty list means everything was applied.
      */
-    fun applyBaseline(lockAdb: Boolean): List<String> {
+    fun applyBaseline(lockAdb: Boolean, allowAccounts: Boolean): List<String> {
         if (!isDeviceOwner()) return listOf("App is not Device Owner")
         val problems = mutableListOf<String>()
         fun attempt(label: String, block: () -> Unit) = try {
@@ -108,9 +121,25 @@ class KioskPolicy(private val context: Context) {
             dpm.addPersistentPreferredActivity(admin, filter, homeAlias)
         }
         attempt("User restrictions") {
-            restrictions.forEach { dpm.addUserRestriction(admin, it) }
-            if (lockAdb) dpm.addUserRestriction(admin, UserManager.DISALLOW_DEBUGGING_FEATURES)
-            else dpm.clearUserRestriction(admin, UserManager.DISALLOW_DEBUGGING_FEATURES)
+            // Only touch restrictions that change: any change makes Android
+            // reconfigure USB, and on some tablets (itel) that stops adbd for good
+            // (see restartAdb). This runs at every app start, so re-adding
+            // unchanged restrictions killed debugging after every update.
+            val current = dpm.getUserRestrictions(admin)
+            restrictionsChanged = false
+            restrictions.filterNot { current.getBoolean(it) }.forEach {
+                dpm.addUserRestriction(admin, it)
+                restrictionsChanged = true
+            }
+            fun setRestriction(key: String, on: Boolean) {
+                if (on == current.getBoolean(key)) return
+                if (on) dpm.addUserRestriction(admin, key) else dpm.clearUserRestriction(admin, key)
+                restrictionsChanged = true
+            }
+            setRestriction(UserManager.DISALLOW_DEBUGGING_FEATURES, lockAdb)
+            // A signed-in account stays on the shared tablet for the next customer;
+            // blocking it also blocks Facebook/Google sign-in in games and apps.
+            setRestriction(UserManager.DISALLOW_MODIFY_ACCOUNTS, !allowAccounts)
         }
         attempt("Keyguard") {
             // Fails (returns false) when a secure screen lock is set.
@@ -122,6 +151,13 @@ class KioskPolicy(private val context: Context) {
         attempt("Stay awake while charging") {
             val all = BatteryManager.BATTERY_PLUGGED_AC or BatteryManager.BATTERY_PLUGGED_USB or BatteryManager.BATTERY_PLUGGED_WIRELESS
             dpm.setGlobalSetting(admin, Settings.Global.STAY_ON_WHILE_PLUGGED_IN, all.toString())
+        }
+        attempt("Popup guard") {
+            if (context.checkSelfPermission(Manifest.permission.WRITE_SECURE_SETTINGS) == PackageManager.PERMISSION_GRANTED) {
+                PopupGuardService.setEnabled(context, true)
+            } else {
+                problems += "Popup guard off: run adb shell pm grant $pkg android.permission.WRITE_SECURE_SETTINGS"
+            }
         }
         if (Build.VERSION.SDK_INT >= 33) attempt("Notification permission") {
             dpm.setPermissionGrantState(admin, pkg, Manifest.permission.POST_NOTIFICATIONS, DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED)
@@ -150,8 +186,13 @@ class KioskPolicy(private val context: Context) {
             // get "App is not available" when they ask for a permission.
             if (packages != null) permissionControllerPackage()?.let { add(it) }
             // Google Play services hosts sign-in and consent screens that approved
-            // apps open; account sign-in itself is blocked by DISALLOW_MODIFY_ACCOUNTS.
+            // apps open (account sign-in itself is an admin setting).
             if (packages != null && isInstalled(GMS)) add(GMS)
+            // Sign-in and web pages that games and social apps open in another app:
+            // "Log in with Facebook" (Facebook app or a browser tab), Google Play
+            // Games, links and payment pages. Without them the login shows
+            // "App is not available" and fails. Settings and app stores never.
+            if (packages != null) addAll(sessionHelpers())
         }.distinct()
         dpm.setLockTaskPackages(admin, allowed.toTypedArray())
         var features = DevicePolicyManager.LOCK_TASK_FEATURE_HOME or DevicePolicyManager.LOCK_TASK_FEATURE_SYSTEM_INFO
@@ -174,6 +215,22 @@ class KioskPolicy(private val context: Context) {
         val recents = ComponentName.unflattenFromString(context.resources.getString(id))?.packageName ?: return null
         val settings = context.packageManager.resolveActivity(Intent(Settings.ACTION_SETTINGS), 0)?.activityInfo?.packageName
         return recents.takeIf { it != pkg && it != settings && isInstalled(it) }
+    }
+
+    /**
+     * Installed helper apps for approved apps' sign-in and web pages: the
+     * default browser, Chrome, Facebook (and Lite), Google Play Games and the
+     * Google services framework. Never Settings or an app store.
+     */
+    private fun sessionHelpers(): List<String> {
+        val pm = context.packageManager
+        val settings = pm.resolveActivity(Intent(Settings.ACTION_SETTINGS), 0)?.activityInfo?.packageName
+        val browser = pm.resolveActivity(
+            Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://example.com")), PackageManager.MATCH_DEFAULT_ONLY
+        )?.activityInfo?.packageName?.takeIf { it != "android" } // "android" = chooser, no default
+        return (listOfNotNull(browser) + SESSION_HELPERS)
+            .distinct()
+            .filter { it != pkg && it != settings && !RestrictedApps.isRestricted(it) && isInstalled(it) }
     }
 
     /** Package that shows runtime permission prompts. Never the Settings app. */
@@ -212,12 +269,113 @@ class KioskPolicy(private val context: Context) {
             )
         }
         attempt("User restrictions") {
-            (restrictions + UserManager.DISALLOW_DEBUGGING_FEATURES).forEach { dpm.clearUserRestriction(admin, it) }
+            (restrictions + UserManager.DISALLOW_DEBUGGING_FEATURES + UserManager.DISALLOW_MODIFY_ACCOUNTS)
+                .forEach { dpm.clearUserRestriction(admin, it) }
         }
         attempt("Keyguard") { dpm.setKeyguardDisabled(admin, false) }
         attempt("Status bar") { dpm.setStatusBarDisabled(admin, false) }
+        attempt("Popup guard") {
+            if (context.checkSelfPermission(Manifest.permission.WRITE_SECURE_SETTINGS) == PackageManager.PERMISSION_GRANTED) {
+                PopupGuardService.setEnabled(context, false)
+            }
+        }
+        attempt("Ad blocking") { if (Build.VERSION.SDK_INT >= 29) dpm.setGlobalPrivateDnsModeOpportunistic(admin) }
         return problems
     }
+
+    /**
+     * Ad blocking for every app: forces Private DNS to an ad-blocking resolver,
+     * so games cannot reach their ad servers (Device Owner, Android 10+). Off
+     * restores automatic Private DNS. Blocking (checks the server over the
+     * network): never call on the main thread. Returns a problem, or null.
+     */
+    fun applyAdBlock(enabled: Boolean): String? {
+        if (Build.VERSION.SDK_INT < 29) return if (enabled) "Ad blocking needs Android 10 or newer" else null
+        if (!isDeviceOwner()) return null
+        return try {
+            if (!enabled) {
+                if (dpm.getGlobalPrivateDnsHost(admin) != null) dpm.setGlobalPrivateDnsModeOpportunistic(admin)
+                null
+            } else when (dpm.setGlobalPrivateDnsModeSpecifiedHost(admin, AD_BLOCK_DNS_HOST)) {
+                DevicePolicyManager.PRIVATE_DNS_SET_NO_ERROR -> null
+                DevicePolicyManager.PRIVATE_DNS_SET_ERROR_HOST_NOT_SERVING ->
+                    "Ad blocking: $AD_BLOCK_DNS_HOST not reachable (no internet?), retrying"
+                else -> "Ad blocking: Private DNS could not be set"
+            }
+        } catch (e: Exception) {
+            "Ad blocking: ${e.javaClass.simpleName}"
+        }
+    }
+
+    /**
+     * Wireless debugging on. Android switches it off by itself (screen off,
+     * network re-checks, restarts), which locks out remote updates while the
+     * kiosk hides Settings. Needs WRITE_SECURE_SETTINGS (granted over adb for
+     * the popup guard). It only accepts computers already paired, and only on
+     * a Wi-Fi network marked "Always allow". Returns whether it is on.
+     */
+    fun ensureWirelessAdb(): Boolean {
+        val cr = context.contentResolver
+        if (Settings.Global.getInt(cr, ADB_WIFI_ENABLED, 0) == 1) return true
+        if (context.checkSelfPermission(Manifest.permission.WRITE_SECURE_SETTINGS) != PackageManager.PERMISSION_GRANTED) return false
+        if (Settings.Global.getInt(cr, Settings.Global.ADB_ENABLED, 0) != 1) return false // USB debugging off/blocked
+        return try {
+            Settings.Global.putInt(cr, ADB_WIFI_ENABLED, 1)
+            Log.i(KioskDeviceAdminReceiver.TAG, "Wireless debugging switched back on")
+            true
+        } catch (e: Exception) {
+            Log.w(KioskDeviceAdminReceiver.TAG, "Could not switch wireless debugging on", e)
+            false
+        }
+    }
+
+    /** The last [applyBaseline] changed user restrictions (USB was reconfigured). */
+    @Volatile var restrictionsChanged = false
+        private set
+
+    /**
+     * Restarts adbd the way switching USB debugging off and on does. After a
+     * user restriction change Android reconfigures USB, and on some tablets
+     * adbd then stays stopped (USB and wireless debugging both gone) until
+     * debugging is toggled by hand. Blocking: call off the main thread.
+     */
+    fun restartAdb() {
+        if (context.checkSelfPermission(Manifest.permission.WRITE_SECURE_SETTINGS) != PackageManager.PERMISSION_GRANTED) return
+        val cr = context.contentResolver
+        try {
+            Thread.sleep(3_000) // let the USB reconfiguration finish
+            Settings.Global.putInt(cr, Settings.Global.ADB_ENABLED, 0)
+            Thread.sleep(1_500)
+            Settings.Global.putInt(cr, Settings.Global.ADB_ENABLED, 1)
+            Thread.sleep(3_000)
+            Settings.Global.putInt(cr, ADB_WIFI_ENABLED, 1)
+            Log.i(KioskDeviceAdminReceiver.TAG, "Debugging restarted after a restriction change")
+        } catch (e: Exception) {
+            Log.w(KioskDeviceAdminReceiver.TAG, "Could not restart debugging", e)
+        }
+    }
+
+    fun wirelessAdbOn(): Boolean =
+        Settings.Global.getInt(context.contentResolver, ADB_WIFI_ENABLED, 0) == 1
+
+    /**
+     * Switches the display off now. The keyguard is disabled in production, so
+     * the power button or a coin (KioskEngine.wakeScreen) brings the kiosk back
+     * without a lock screen. False when not Device Owner.
+     */
+    fun turnScreenOff(): Boolean {
+        if (!isDeviceOwner()) return false
+        return try {
+            dpm.lockNow()
+            true
+        } catch (e: Exception) {
+            Log.w(KioskDeviceAdminReceiver.TAG, "lockNow failed", e)
+            false
+        }
+    }
+
+    fun adBlockActive(): Boolean =
+        Build.VERSION.SDK_INT >= 29 && isDeviceOwner() && dpm.getGlobalPrivateDnsHost(admin) == AD_BLOCK_DNS_HOST
 
     /** Permanently gives up Device Owner. Irreversible without re-provisioning. */
     fun clearDeviceOwner(): Boolean {

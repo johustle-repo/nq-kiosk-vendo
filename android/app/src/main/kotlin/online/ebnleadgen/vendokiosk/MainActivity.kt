@@ -313,6 +313,8 @@ class MainActivity : FlutterActivity() {
                 engine.requireAdmin()
                 background(result) { engine.unpairController().orThrowCode(); true }
             }
+            // Customer action (no PIN): "Insert coin" sends the next coins to this tablet.
+            "claimCoinBox" -> background(result) { engine.claimCoinBox().orThrowCode() }
             "endSession" -> {
                 engine.requireAdmin()
                 background(result) { engine.endSession().orThrowCode(); true }
@@ -373,9 +375,43 @@ class MainActivity : FlutterActivity() {
                 setScreenAwake(call.argument<Boolean>("awake") ?: true)
                 result.success(true)
             }
+            "sleepScreen" -> {
+                // Not Device Owner (demo): dim instead of switching off.
+                if (!engine.policy.turnScreenOff()) setScreenAwake(false)
+                result.success(true)
+            }
+            "setScreenOff" -> {
+                engine.requireAdmin()
+                engine.setScreenOff(call.argument<Int>("seconds") ?: 60)
+                result.success(true)
+            }
             "setIdleSleep" -> {
                 engine.requireAdmin()
                 engine.setIdleSleep(call.argument<Int>("seconds") ?: 60)
+                result.success(true)
+            }
+            "setAllowAccounts" -> {
+                engine.requireAdmin()
+                engine.setAllowAccounts(call.argument<Boolean>("allow") ?: true)
+                result.success(true)
+            }
+            "setKeepWirelessAdb" -> {
+                engine.requireAdmin()
+                engine.setKeepWirelessAdb(call.argument<Boolean>("enabled") ?: true)
+                result.success(true)
+            }
+            "setBlockAds" -> {
+                engine.requireAdmin()
+                engine.setBlockAds(call.argument<Boolean>("enabled") ?: true)
+                result.success(true)
+            }
+            "setAutoCharge" -> {
+                engine.requireAdmin()
+                engine.setAutoCharge(
+                    call.argument<Boolean>("enabled") ?: true,
+                    call.argument<Int>("startPct") ?: 20,
+                    call.argument<Int>("stopPct") ?: 90,
+                )
                 result.success(true)
             }
             "openLockScreenSettings" -> {

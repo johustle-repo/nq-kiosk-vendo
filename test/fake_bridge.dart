@@ -5,7 +5,8 @@ import 'package:vendo_kiosk/src/model/kiosk_state.dart';
 
 /// In-memory stand-in for the Android side, for widget tests.
 class FakeKioskBridge implements KioskBridge {
-  FakeKioskBridge(Map<Object?, Object?> initial) : _state = KioskState.fromMap(initial);
+  FakeKioskBridge(Map<Object?, Object?> initial)
+    : _state = KioskState.fromMap(initial);
 
   final _controller = StreamController<KioskState>.broadcast();
   KioskState _state;
@@ -26,18 +27,30 @@ class FakeKioskBridge implements KioskBridge {
   Future<KioskState> getState() async => _state;
 
   @override
-  Future<List<InstalledApp>> listApps({required bool onlyAllowed, bool includeIcons = true}) async {
+  Future<List<InstalledApp>> listApps({
+    required bool onlyAllowed,
+    bool includeIcons = true,
+  }) async {
     calls.add('listApps:$onlyAllowed');
-    return onlyAllowed ? apps.where((a) => _state.allowedPackages.contains(a.packageName)).toList() : apps;
+    return onlyAllowed
+        ? apps
+              .where((a) => _state.allowedPackages.contains(a.packageName))
+              .toList()
+        : apps;
   }
 
   @override
-  Future<void> launchApp(String packageName) async => calls.add('launch:$packageName');
+  Future<void> launchApp(String packageName) async =>
+      calls.add('launch:$packageName');
 
   @override
   Future<String> createPin(String pin) async {
     calls.add('createPin');
-    if (pin == '123456') throw KioskException('invalid_argument', 'PIN cannot be a simple sequence.');
+    if (pin == '123456')
+      throw KioskException(
+        'invalid_argument',
+        'PIN cannot be a simple sequence.',
+      );
     return 'ABCD-EFGH-JKMN-PQRS';
   }
 
@@ -48,11 +61,16 @@ class FakeKioskBridge implements KioskBridge {
     calls.add('verifyPin');
     if (pin == '482915') return const PinResult(ok: true);
     failures++;
-    return PinResult(ok: false, failures: failures, lockoutMs: failures >= 4 ? 30000 : 0);
+    return PinResult(
+      ok: false,
+      failures: failures,
+      lockoutMs: failures >= 4 ? 30000 : 0,
+    );
   }
 
   @override
-  Future<PinResult> recoverWithCode(String code, String newPin) async => const PinResult(ok: false);
+  Future<PinResult> recoverWithCode(String code, String newPin) async =>
+      const PinResult(ok: false);
 
   @override
   Future<String> changePin(String pin) async => 'NEWC-ODEX-XXXX-YYYY';
@@ -67,7 +85,8 @@ class FakeKioskBridge implements KioskBridge {
   }
 
   @override
-  Future<void> setAllowedPackages(List<String> packages) async => calls.add('setAllowed:${packages.join(',')}');
+  Future<void> setAllowedPackages(List<String> packages) async =>
+      calls.add('setAllowed:${packages.join(',')}');
 
   @override
   Future<void> setLossTimeout(int seconds) async => calls.add('loss:$seconds');
@@ -76,7 +95,11 @@ class FakeKioskBridge implements KioskBridge {
   Future<void> setLockAdb(bool lock) async {}
 
   @override
-  Future<String> pairController(String address, String code, int station) async {
+  Future<String> pairController(
+    String address,
+    String code,
+    int station,
+  ) async {
     calls.add('pair:$station');
     return 'vk-test';
   }
@@ -89,6 +112,17 @@ class FakeKioskBridge implements KioskBridge {
 
   @override
   Future<void> endSession() async {}
+
+  /// Error code to throw from [claimCoinBox] (e.g. `busy:3:40`), or null.
+  String? claimError;
+  int claims = 0;
+
+  @override
+  Future<int> claimCoinBox() async {
+    claims++;
+    if (claimError != null) throw KioskException(claimError!, claimError);
+    return 60;
+  }
 
   @override
   Future<String> enrollCloud(String code) async => 'abc';
@@ -124,10 +158,38 @@ class FakeKioskBridge implements KioskBridge {
   Future<void> setScreenAwake(bool awake) async => calls.add('awake:$awake');
 
   @override
-  Future<void> setIdleSleep(int seconds) async => calls.add('idleSleep:$seconds');
+  Future<void> setIdleSleep(int seconds) async =>
+      calls.add('idleSleep:$seconds');
 
   @override
-  Future<void> openLockScreenSettings() async => calls.add('openLockScreenSettings');
+  Future<void> sleepScreen() async => calls.add('sleepScreen');
+
+  @override
+  Future<void> setScreenOff(int seconds) async =>
+      calls.add('screenOff:$seconds');
+
+  @override
+  Future<void> setBlockAds(bool enabled) async =>
+      calls.add('blockAds:$enabled');
+
+  @override
+  Future<void> setKeepWirelessAdb(bool enabled) async =>
+      calls.add('keepWirelessAdb:$enabled');
+
+  @override
+  Future<void> setAllowAccounts(bool allow) async =>
+      calls.add('allowAccounts:$allow');
+
+  @override
+  Future<void> setAutoCharge({
+    required bool enabled,
+    required int startPct,
+    required int stopPct,
+  }) async => calls.add('autoCharge:$enabled:$startPct:$stopPct');
+
+  @override
+  Future<void> openLockScreenSettings() async =>
+      calls.add('openLockScreenSettings');
 }
 
 /// Builds a native-style snapshot map with sensible defaults.
@@ -141,47 +203,85 @@ Map<Object?, Object?> snapshot({
   String link = 'connected',
   int? lastOkAgoMs = 500,
   String cloudLink = 'ok',
-  bool cloudEnrolled = true,
+  bool cloudEnrolled = false,
   int? expiredAgoMs,
   String? expiredReason,
   List<String> allowed = const ['com.example.video'],
   bool hasPin = true,
   bool unlocked = false,
+  int adminOpenSeq = 0,
   int secondsPerPulse = 240,
   int? seq,
   int? lastCreditAgoMs,
   int? lastAddedS,
   bool isDefaultHome = false,
   int idleSleepS = 60,
+  int screenOffS = 60,
+  bool tapAdmin = false,
+  int batteryPct = 50,
+  bool chargeRequested = false,
+  bool? chargeRelayOn,
   int station = 1,
   int selectedStation = 0,
   int heldPulses = 0,
-}) =>
-    {
-      'mode': mode,
-      'deviceOwner': deviceOwner,
-      'lockTask': deviceOwner && mode == 'production' ? 'locked' : 'none',
-      'policyProblems': <Object?>[],
-      'access': {'granted': granted, 'remainingMs': remainingMs, 'source': granted ? 'controller' : null, 'reason': granted ? null : reason},
-      'expiredAgoMs': expiredAgoMs,
-      'expiredReason': expiredReason,
-      'controller': {
-        'paired': paired,
-        'address': '192.168.1.50:80',
-        'deviceId': 'vk-abc',
-        'link': link,
-        'lastOkAgoMs': lastOkAgoMs,
-        'secondsPerPulse': secondsPerPulse,
-        'seq': seq,
-        'lastCreditAgoMs': lastCreditAgoMs,
-        'lastAddedS': lastAddedS,
-        'station': station,
-        'selectedStation': selectedStation,
-        'selectedTtlS': selectedStation == 0 ? 0 : 60,
-        'heldPulses': heldPulses,
-      },
-      'cloud': {'enrolled': cloudEnrolled, 'link': cloudLink, 'configVersion': 1},
-      'settings': {'allowedPackages': allowed, 'lossTimeoutS': 30, 'lockAdb': false, 'isDefaultHome': isDefaultHome, 'idleSleepS': idleSleepS},
-      'admin': {'hasPin': hasPin, 'unlocked': unlocked, 'lockoutMs': 0},
-      'demoRemainingMs': 0,
-    };
+}) => {
+  'mode': mode,
+  'deviceOwner': deviceOwner,
+  'lockTask': deviceOwner && mode == 'production' ? 'locked' : 'none',
+  'policyProblems': <Object?>[],
+  'access': {
+    'granted': granted,
+    'remainingMs': remainingMs,
+    'source': granted ? 'controller' : null,
+    'reason': granted ? null : reason,
+  },
+  'expiredAgoMs': expiredAgoMs,
+  'expiredReason': expiredReason,
+  'controller': {
+    'paired': paired,
+    'address': '192.168.1.50:80',
+    'deviceId': 'vk-abc',
+    'link': link,
+    'lastOkAgoMs': lastOkAgoMs,
+    'secondsPerPulse': secondsPerPulse,
+    'seq': seq,
+    'lastCreditAgoMs': lastCreditAgoMs,
+    'lastAddedS': lastAddedS,
+    'station': station,
+    'selectedStation': selectedStation,
+    'selectedTtlS': selectedStation == 0 ? 0 : 60,
+    'heldPulses': heldPulses,
+  },
+  'cloud': {'enrolled': cloudEnrolled, 'link': cloudLink, 'configVersion': 1},
+  'settings': {
+    'allowedPackages': allowed,
+    'lossTimeoutS': 30,
+    'lockAdb': false,
+    'isDefaultHome': isDefaultHome,
+    'idleSleepS': idleSleepS,
+    'screenOffS': screenOffS,
+    'blockAds': true,
+    'keepWirelessAdb': true,
+    'tapAdmin': tapAdmin,
+    'allowAccounts': true,
+    'wirelessAdbOn': true,
+    'adBlockActive': mode == 'production' && deviceOwner,
+    'autoCharge': true,
+    'chargeStartPct': 20,
+    'chargeStopPct': 90,
+  },
+  'charge': {
+    'batteryPct': batteryPct,
+    'charging': chargeRelayOn == true,
+    'requested': chargeRequested,
+    'relayOn': chargeRelayOn,
+    'lastError': null,
+  },
+  'admin': {
+    'hasPin': hasPin,
+    'unlocked': unlocked,
+    'lockoutMs': 0,
+    'openSeq': adminOpenSeq,
+  },
+  'demoRemainingMs': 0,
+};

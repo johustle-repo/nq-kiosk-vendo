@@ -2,6 +2,8 @@ package online.ebnleadgen.vendokiosk.service
 
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
@@ -14,6 +16,7 @@ import online.ebnleadgen.vendokiosk.MainActivity
 import online.ebnleadgen.vendokiosk.core.AccessDecision
 import online.ebnleadgen.vendokiosk.core.AccessInputs
 import online.ebnleadgen.vendokiosk.core.AccessPolicy
+import online.ebnleadgen.vendokiosk.core.ChargeRule
 import online.ebnleadgen.vendokiosk.core.RestrictedApps
 import online.ebnleadgen.vendokiosk.core.ControllerProtocol
 import online.ebnleadgen.vendokiosk.core.ControllerProtocol.toHex
@@ -54,6 +57,10 @@ class KioskEngine private constructor(context: Context) {
         private const val TICK_MS = 500L
         private const val POLL_INTERVAL_MS = 1_000L
         private const val CLOUD_INTERVAL_MS = 30_000L
+        private const val CHARGE_CHECK_MS = 30_000L
+        private const val AD_BLOCK_REFRESH_MS = 30 * 60_000L
+        private const val AD_BLOCK_RETRY_MS = 60_000L
+        private const val CHARGE_RESEND_MS = 10 * 60_000L
         private const val ADMIN_UNLOCK_MS = 5 * 60_000L
         private const val RELOCK_INTERVAL_MS = 3_000L
 
@@ -80,6 +87,11 @@ class KioskEngine private constructor(context: Context) {
     private val cloudExecutor = Executors.newSingleThreadExecutor()
     private val pollInFlight = AtomicBoolean(false)
     private val cloudInFlight = AtomicBoolean(false)
+    private val chargeExecutor = Executors.newSingleThreadExecutor()
+    private val chargeInFlight = AtomicBoolean(false)
+    private val adBlockExecutor = Executors.newSingleThreadExecutor()
+    private val adbRestartExecutor = Executors.newSingleThreadExecutor()
+    private val adBlockInFlight = AtomicBoolean(false)
 
     private val listeners = CopyOnWriteArrayList<(Map<String, Any?>) -> Unit>()
 
@@ -111,6 +123,22 @@ class KioskEngine private constructor(context: Context) {
     @Volatile private var controllerKey: ByteArray? = store.controllerKey
     @Volatile private var adminUnlockedUntilMs = 0L
 
+    // ---- charger relay on the coin box (written by the charge executor)
+    @Volatile private var chargeConfirmed: Boolean? = null // what the coin box last accepted
+    @Volatile private var chargeConfirmedBoot: String? = null
+    @Volatile private var chargeConfirmedAtMs = 0L
+    @Volatile private var chargeRelayOn: Boolean? = null
+    @Volatile private var chargeLastError: String? = null
+    private var lastChargeCheckAtMs = -CHARGE_CHECK_MS
+    private var chargeLowReadings = 0
+
+    // ---- ad blocking (Private DNS)
+    @Volatile private var adBlockProblem: String? = null
+    private var lastAdBlockAtMs = -AD_BLOCK_REFRESH_MS
+
+    /** Bumped when the dashboard asks to open admin; Flutter opens the admin screen on a change. */
+    @Volatile private var adminOpenSeq = 0
+
     private fun now() = SystemClock.elapsedRealtime()
 
     // ================================================================ lifecycle
@@ -120,7 +148,7 @@ class KioskEngine private constructor(context: Context) {
         running = true
         // Fail-safe default: until a verified report arrives, customers get nothing.
         if (store.mode == KioskMode.PRODUCTION) {
-            policyProblems = policy.applyBaseline(store.lockAdbInProduction)
+            policyProblems = applyBaseline()
             appliedGrant = false
             appliedPackages = emptyList()
         }
@@ -173,6 +201,18 @@ class KioskEngine private constructor(context: Context) {
         if (t - lastCloudAtMs >= CLOUD_INTERVAL_MS) {
             lastCloudAtMs = t
             scheduleCloud()
+        }
+        val adBlockEvery = if (adBlockProblem == null) AD_BLOCK_REFRESH_MS else AD_BLOCK_RETRY_MS
+        if (store.mode == KioskMode.PRODUCTION && t - lastAdBlockAtMs >= adBlockEvery) {
+            lastAdBlockAtMs = t
+            applyAdBlock()
+        }
+        if (t - lastChargeCheckAtMs >= CHARGE_CHECK_MS) {
+            lastChargeCheckAtMs = t
+            if (store.keepWirelessAdb && !(store.mode == KioskMode.PRODUCTION && store.lockAdbInProduction)) {
+                policy.ensureWirelessAdb()
+            }
+            checkCharge()
         }
         evaluate()
         if (store.mode == KioskMode.PRODUCTION && t - lastWatchdogAtMs >= 50_000) {
@@ -342,6 +382,9 @@ class KioskEngine private constructor(context: Context) {
                 cloudLastOkAtMs = now()
                 cloudLastError = null
                 res.optJSONObject("config")?.let { cfg -> handler.post { applyCloudConfig(cfg) } }
+                // One-shot request from a signed-in dashboard administrator (audited there).
+                if (res.optJSONObject("admin_unlock") != null) handler.post { remoteAdminUnlock() }
+                if (res.optBoolean("tap_admin", false)) handler.post { enableTapAdmin() }
             } catch (e: CloudHttpException) {
                 cloudLink = if (e.status == 401) "unauthorized" else "error"
                 cloudLastError = e.code
@@ -365,6 +408,7 @@ class KioskEngine private constructor(context: Context) {
             .put("mode", store.mode.wire)
             .put("device_owner", isDeviceOwner())
             .put("lock_task", policy.lockTaskState())
+            .put("tap_admin", store.cloudToken == null || store.tapAdminEnabled)
             .put("access", decision.let { if (it is AccessDecision.Denied) it.reason.wire else "granted" })
             .put(
                 "controller", JSONObject()
@@ -378,6 +422,136 @@ class KioskEngine private constructor(context: Context) {
             .put("config_version_applied", store.cloudConfigVersion)
             .put("model", "${Build.MANUFACTURER} ${Build.MODEL}")
             .put("android_sdk", Build.VERSION.SDK_INT)
+            .put("battery", batteryStatus())
+    }
+
+    /** Battery level (0-100, -1 if unknown) and whether it is charging, for the dashboard. */
+    private fun batteryStatus(): JSONObject = JSONObject()
+        .put("pct", batteryPct())
+        .put("charging", isCharging())
+        .put("charge_requested", store.chargeRequested)
+        .put("charge_relay", chargeRelayOn ?: JSONObject.NULL)
+
+    /** Last battery broadcast (sticky; no receiver is registered). */
+    private fun batteryIntent(): Intent? = try {
+        ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+    } catch (e: Exception) {
+        null
+    }
+
+    /** Level from the battery broadcast (what Settings shows); -1 if unknown. */
+    private fun batteryPct(): Int {
+        val i = batteryIntent()
+        val level = i?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = i?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+        val pct = if (level >= 0 && scale > 0) level * 100 / scale
+        else ctx.getSystemService(BatteryManager::class.java)?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
+        return if (pct in 0..100) pct else -1
+    }
+
+    /** Power connected (charging, or full while plugged in). */
+    private fun isCharging(): Boolean =
+        (batteryIntent()?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0 ||
+            ctx.getSystemService(BatteryManager::class.java)?.isCharging == true
+
+    // ================================================================ charger relay (coin box D6)
+
+    /**
+     * Asks the coin box to switch its charger relay on below the start level and
+     * off at the stop level (admin settings). Sent when the decision changes, when
+     * the coin box restarts, and every few minutes as a refresh; failures retry
+     * on the next check.
+     */
+    private fun checkCharge() {
+        if (controllerKey == null || store.controllerAddress == null) return
+        val boot = tracker.last?.bootId ?: return
+        val pct = batteryPct()
+        val charging = isCharging()
+        chargeLowReadings = if (pct in 0 until store.chargeStartPct) chargeLowReadings + 1 else 0
+        val want = ChargeRule.wantsCharge(
+            store.autoChargeEnabled, pct, store.chargeStartPct, store.chargeStopPct, store.chargeRequested,
+            charging, chargeLowReadings,
+        )
+        if (want != store.chargeRequested) {
+            store.chargeRequested = want
+            Log.i(TAG, "Battery $pct%${if (charging) " charging" else ""}: charger relay ${if (want) "on" else "off"}")
+        }
+        val fresh = chargeConfirmed == want && chargeConfirmedBoot == boot && now() - chargeConfirmedAtMs < CHARGE_RESEND_MS
+        if (fresh || !chargeInFlight.compareAndSet(false, true)) return
+        chargeExecutor.execute {
+            try {
+                sendCommandForBody(if (want) "charge_on" else "charge_off").fold(
+                    onSuccess = { body ->
+                        chargeConfirmed = want
+                        chargeConfirmedBoot = boot
+                        chargeConfirmedAtMs = now()
+                        chargeRelayOn = body.contains("\"relay\":true")
+                        chargeLastError = null
+                    },
+                    onFailure = { e ->
+                        chargeConfirmed = null
+                        chargeLastError = (e as? ProtocolException)?.code ?: e.javaClass.simpleName
+                    },
+                )
+            } finally {
+                chargeInFlight.set(false)
+            }
+            handler.post { emit() }
+        }
+    }
+
+    /** Applies the ad-blocking setting off the engine thread (the check uses the network). */
+    private fun applyAdBlock() {
+        if (!adBlockInFlight.compareAndSet(false, true)) return
+        val enabled = store.blockAds && store.mode == KioskMode.PRODUCTION
+        adBlockExecutor.execute {
+            try {
+                val problem = policy.applyAdBlock(enabled)
+                if (problem != adBlockProblem) Log.i(TAG, problem ?: "Ad blocking ${if (enabled) "on" else "off"}")
+                adBlockProblem = problem
+            } finally {
+                adBlockInFlight.set(false)
+            }
+            handler.post { emit() }
+        }
+    }
+
+    fun setAllowAccounts(allow: Boolean) {
+        store.allowAccounts = allow
+        handler.post {
+            if (store.mode == KioskMode.PRODUCTION) policyProblems = applyBaseline().also { appliedGrant = null }
+            evaluate()
+            emit()
+        }
+    }
+
+    fun setKeepWirelessAdb(enabled: Boolean) {
+        store.keepWirelessAdb = enabled
+        handler.post {
+            if (enabled) policy.ensureWirelessAdb()
+            emit()
+        }
+    }
+
+    fun setBlockAds(enabled: Boolean) {
+        store.blockAds = enabled
+        handler.post {
+            lastAdBlockAtMs = now()
+            applyAdBlock()
+            emit()
+        }
+    }
+
+    fun setAutoCharge(enabled: Boolean, startPct: Int, stopPct: Int) {
+        val (start, stop) = ChargeRule.normalize(startPct, stopPct)
+        store.autoChargeEnabled = enabled
+        store.chargeStartPct = start
+        store.chargeStopPct = stop
+        handler.post {
+            lastChargeCheckAtMs = now()
+            checkCharge()
+            emit()
+        }
     }
 
     /** Applies a newer cloud configuration version (allowed apps, loss timeout). */
@@ -475,11 +649,30 @@ class KioskEngine private constructor(context: Context) {
                 "lockAdb" to store.lockAdbInProduction,
                 "isDefaultHome" to policy.isDefaultHome(),
                 "idleSleepS" to store.idleSleepS,
+                "screenOffS" to store.screenOffS,
+                "blockAds" to store.blockAds,
+                "keepWirelessAdb" to store.keepWirelessAdb,
+                "tapAdmin" to store.tapAdminEnabled,
+                "allowAccounts" to store.allowAccounts,
+                "wirelessAdbOn" to policy.wirelessAdbOn(),
+                "adBlockActive" to policy.adBlockActive(),
+                "adBlockProblem" to adBlockProblem,
+                "autoCharge" to store.autoChargeEnabled,
+                "chargeStartPct" to store.chargeStartPct,
+                "chargeStopPct" to store.chargeStopPct,
                 "screenLockSecure" to isScreenLockSecure(),
+            ),
+            "charge" to mapOf(
+                "batteryPct" to batteryPct(),
+                "charging" to isCharging(),
+                "requested" to store.chargeRequested,
+                "relayOn" to chargeRelayOn,
+                "lastError" to chargeLastError,
             ),
             "admin" to mapOf(
                 "hasPin" to (store.pinRecord != null),
                 "unlocked" to isAdminUnlocked(),
+                "openSeq" to adminOpenSeq,
                 "lockoutMs" to lockout.remainingLockMs(t),
             ),
             "demoRemainingMs" to demo.remainingMs(t),
@@ -496,8 +689,32 @@ class KioskEngine private constructor(context: Context) {
         adminUnlockedUntilMs = now() + ADMIN_UNLOCK_MS
     }
 
+    /**
+     * The dashboard asked to open admin on this tablet: unlock without the PIN
+     * (the dashboard login is the proof) for the normal unlock window, bring the
+     * kiosk to the front and let Flutter open the admin screen.
+     */
+    private fun remoteAdminUnlock() {
+        if (store.mode == KioskMode.UNCONFIGURED) return
+        Log.i(TAG, "Admin unlocked from the dashboard")
+        adminUnlockedUntilMs = now() + ADMIN_UNLOCK_MS
+        adminOpenSeq++
+        bringKioskToFront()
+        emit()
+    }
+
+    /** The dashboard turned the 10-tap admin gesture on (until admin is locked). */
+    private fun enableTapAdmin() {
+        if (store.tapAdminEnabled) return
+        Log.i(TAG, "10-tap admin turned on from the dashboard")
+        store.tapAdminEnabled = true
+        emit()
+    }
+
     fun lockAdmin() {
         adminUnlockedUntilMs = 0
+        // Locking admin also turns the dashboard-enabled 10-tap gesture off again.
+        store.tapAdminEnabled = false
         handler.post { emit() }
     }
 
@@ -571,7 +788,7 @@ class KioskEngine private constructor(context: Context) {
             cachedOwner = null
             if (mode == KioskMode.PRODUCTION) {
                 demo.clear()
-                policyProblems = policy.applyBaseline(store.lockAdbInProduction)
+                policyProblems = applyBaseline()
                 appliedGrant = null
             } else {
                 policyProblems = emptyList()
@@ -601,6 +818,11 @@ class KioskEngine private constructor(context: Context) {
         handler.post { emit() }
     }
 
+    fun setScreenOff(seconds: Int) {
+        store.screenOffS = seconds
+        handler.post { emit() }
+    }
+
     private fun isScreenLockSecure(): Boolean =
         ctx.getSystemService(android.app.KeyguardManager::class.java)?.isDeviceSecure == true
 
@@ -621,10 +843,19 @@ class KioskEngine private constructor(context: Context) {
         bringKioskToFront()
     }
 
+    /** Kiosk policies; brings debugging back if a restriction change stopped it. */
+    private fun applyBaseline(): List<String> {
+        val problems = policy.applyBaseline(store.lockAdbInProduction, store.allowAccounts)
+        if (policy.restrictionsChanged && store.keepWirelessAdb && !store.lockAdbInProduction) {
+            adbRestartExecutor.execute { policy.restartAdb() }
+        }
+        return problems
+    }
+
     fun setLockAdb(lock: Boolean) {
         store.lockAdbInProduction = lock
         handler.post {
-            if (store.mode == KioskMode.PRODUCTION) policyProblems = policy.applyBaseline(lock).also { appliedGrant = null }
+            if (store.mode == KioskMode.PRODUCTION) policyProblems = applyBaseline().also { appliedGrant = null }
             evaluate()
             emit()
         }
@@ -669,24 +900,49 @@ class KioskEngine private constructor(context: Context) {
         return Result.success(Unit)
     }
 
-    private fun sendCommand(name: String): Result<Unit> = try {
+    private fun sendCommand(name: String): Result<Unit> = sendCommandForBody(name).map { }
+
+    /** Signed tablet command; returns the response body on HTTP 200. */
+    private fun sendCommandForBody(name: String): Result<String> = try {
         val address = store.controllerAddress ?: throw IllegalStateException("not_paired")
         val key = controllerKey ?: throw IllegalStateException("not_paired")
         val boot = tracker.last?.bootId ?: throw IllegalStateException("controller_not_connected")
         val ctr = store.nextCommandCounter()
         val station = store.controllerStation
         val r = http.postForm(
-            address, "/api/v1/${if (name == "end_session") "session/end" else name}",
+            address, "/api/v1/${commandPath(name)}",
             mapOf(
                 "station" to station.toString(), "boot_id" to boot, "ctr" to ctr.toString(),
                 "mac" to ControllerProtocol.commandMac(key, name, station, boot, ctr),
             )
         )
+        if (r.status == 409 && r.body.contains("\"busy\"")) {
+            val other = Regex("\"selected_station\":(\\d+)").find(r.body)?.groupValues?.get(1) ?: "0"
+            val ttl = Regex("\"ttl_s\":(\\d+)").find(r.body)?.groupValues?.get(1) ?: "0"
+            throw ProtocolException("busy:$other:$ttl", "The coin box is in use by tablet $other")
+        }
+        if (r.status == 404) throw ProtocolException("coin_box_outdated", "Coin box firmware does not support this")
         if (r.status != 200) throw ProtocolException("http_${r.status}", r.body.take(100))
-        Result.success(Unit)
+        Result.success(r.body)
     } catch (e: Exception) {
         Result.failure(e)
     }
+
+    private fun commandPath(name: String) = when (name) {
+        "end_session" -> "session/end"
+        "charge_on" -> "charge/on"
+        "charge_off" -> "charge/off"
+        else -> name
+    }
+
+    /**
+     * Blocking. A player tapped "Insert coin": ask the coin box to send its next
+     * coins to this tablet. Returns how long the claim lasts (seconds); fails
+     * with "busy:<tablet>:<seconds>" while another tablet is inserting coins.
+     */
+    fun claimCoinBox(): Result<Int> = sendCommandForBody("select").map { body ->
+        Regex("\"ttl_s\":(\\d+)").find(body)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+    }.also { if (it.isSuccess) handler.post { lastPollAtMs = now(); schedulePoll() } }
 
     /** Blocking. Ends the current paid session on the controller (admin action). */
     fun endSession(): Result<Unit> = sendCommand("end_session").also { handler.post { demo.clear(); evaluate(); emit() } }
@@ -727,6 +983,8 @@ class KioskEngine private constructor(context: Context) {
         val problems = policy.releaseKiosk()
         store.mode = KioskMode.DEMO
         handler.post {
+            adBlockProblem = null
+            lastAdBlockAtMs = -AD_BLOCK_REFRESH_MS // re-applied when production is turned on again
             appliedGrant = null
             policyProblems = emptyList()
             releaseWakeLock()

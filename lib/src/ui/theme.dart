@@ -19,7 +19,36 @@ class KioskPalette {
   static const warn = Color(0xFFB86E00);
   static const danger = Color(0xFFC62F2B);
   static const textMuted = Color(0xFF5F6468);
+
+  // Hero panels: charcoal fading into deep VeNdO green, with brighter
+  // accents that stay readable on the dark background.
+  static const ink = Color(0xFF1F2224);
+  static const inkGreen = Color(0xFF0D3B27);
+  static const gold = Color(0xFFF2B22E);
+  static const mint = Color(0xFF1FC370);
+  static const coral = Color(0xFFFF7A6B);
+  static const onInk = Color(0xFFFFFFFF);
+  static const onInkMuted = Color(0xB3FFFFFF);
+
+  static const heroGradient = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [ink, Color(0xFF1A2E25), inkGreen],
+    stops: [0.0, 0.55, 1.0],
+  );
 }
+
+/// Soft elevation for light cards (replaces hard outlines).
+const kCardShadow = [
+  BoxShadow(color: Color(0x12000000), blurRadius: 24, offset: Offset(0, 8)),
+  BoxShadow(color: Color(0x0A000000), blurRadius: 3, offset: Offset(0, 1)),
+];
+
+/// Deeper shadow for the dark hero panels.
+const kHeroShadow = [
+  BoxShadow(color: Color(0x33018E4E), blurRadius: 32, offset: Offset(0, 14)),
+  BoxShadow(color: Color(0x1F000000), blurRadius: 8, offset: Offset(0, 2)),
+];
 
 /// How urgent the remaining time is (drives the timer card colours).
 enum TimeLevel { none, normal, low, critical }
@@ -36,6 +65,14 @@ Color timeLevelColor(TimeLevel l) => switch (l) {
   TimeLevel.normal => KioskPalette.accent,
   TimeLevel.low => KioskPalette.warn,
   TimeLevel.critical => KioskPalette.danger,
+};
+
+/// [timeLevelColor] for text on the dark hero panels.
+Color timeLevelColorOnInk(TimeLevel l) => switch (l) {
+  TimeLevel.none => KioskPalette.onInkMuted,
+  TimeLevel.normal => KioskPalette.mint,
+  TimeLevel.low => KioskPalette.gold,
+  TimeLevel.critical => KioskPalette.coral,
 };
 
 ThemeData buildTheme(Brightness brightness) {

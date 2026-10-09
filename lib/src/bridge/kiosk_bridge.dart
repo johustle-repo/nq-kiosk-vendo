@@ -74,6 +74,11 @@ abstract class KioskBridge {
   Future<void> setControllerAddress(String address);
   Future<void> unpairController();
   Future<void> endSession();
+
+  /// A player tapped "Insert coin": the coin box sends its next coins to this
+  /// tablet. Returns how long the claim lasts in seconds; throws
+  /// `busy:<tablet>:<seconds>` while another tablet is inserting coins.
+  Future<int> claimCoinBox();
   Future<String> enrollCloud(String code);
   Future<void> unenrollCloud();
   Future<void> simulateCoin(int pulses);
@@ -92,6 +97,28 @@ abstract class KioskBridge {
   Future<void> setScreenAwake(bool awake);
 
   Future<void> setIdleSleep(int seconds);
+
+  /// Switches the display off now (idle kiosk). A coin or the power button wakes it.
+  Future<void> sleepScreen();
+
+  /// Seconds the idle logo stays up before the display is switched off (0 = never).
+  Future<void> setScreenOff(int seconds);
+
+  /// Ad-blocking Private DNS in production.
+  Future<void> setBlockAds(bool enabled);
+
+  /// Turn wireless debugging back on whenever Android switches it off.
+  Future<void> setKeepWirelessAdb(bool enabled);
+
+  /// Customers may sign in to accounts (Facebook/Google login in games and apps).
+  Future<void> setAllowAccounts(bool allow);
+
+  /// Charger relay on the coin box: on below [startPct], off at [stopPct].
+  Future<void> setAutoCharge({
+    required bool enabled,
+    required int startPct,
+    required int stopPct,
+  });
 
   Future<void> openLockScreenSettings();
 }
@@ -202,12 +229,15 @@ class MethodChannelKioskBridge implements KioskBridge {
   Future<void> setLockAdb(bool lock) => _call('setLockAdb', {'lock': lock});
 
   @override
-  Future<String> pairController(String address, String code, int station) async =>
-      (await _call<String>('pairController', {
-        'address': address,
-        'code': code,
-        'station': station,
-      }))!;
+  Future<String> pairController(
+    String address,
+    String code,
+    int station,
+  ) async => (await _call<String>('pairController', {
+    'address': address,
+    'code': code,
+    'station': station,
+  }))!;
 
   @override
   Future<void> setControllerAddress(String address) =>
@@ -215,6 +245,9 @@ class MethodChannelKioskBridge implements KioskBridge {
 
   @override
   Future<void> unpairController() => _call('unpairController');
+
+  @override
+  Future<int> claimCoinBox() async => (await _call<int>('claimCoinBox')) ?? 0;
 
   @override
   Future<void> endSession() => _call('endSession');
@@ -255,10 +288,42 @@ class MethodChannelKioskBridge implements KioskBridge {
   Future<void> restoreNormalHome() => _call('restoreNormalHome');
 
   @override
-  Future<void> setScreenAwake(bool awake) => _call('setScreenAwake', {'awake': awake});
+  Future<void> setScreenAwake(bool awake) =>
+      _call('setScreenAwake', {'awake': awake});
 
   @override
-  Future<void> setIdleSleep(int seconds) => _call('setIdleSleep', {'seconds': seconds});
+  Future<void> setIdleSleep(int seconds) =>
+      _call('setIdleSleep', {'seconds': seconds});
+
+  @override
+  Future<void> sleepScreen() => _call('sleepScreen');
+
+  @override
+  Future<void> setScreenOff(int seconds) =>
+      _call('setScreenOff', {'seconds': seconds});
+
+  @override
+  Future<void> setBlockAds(bool enabled) =>
+      _call('setBlockAds', {'enabled': enabled});
+
+  @override
+  Future<void> setKeepWirelessAdb(bool enabled) =>
+      _call('setKeepWirelessAdb', {'enabled': enabled});
+
+  @override
+  Future<void> setAllowAccounts(bool allow) =>
+      _call('setAllowAccounts', {'allow': allow});
+
+  @override
+  Future<void> setAutoCharge({
+    required bool enabled,
+    required int startPct,
+    required int stopPct,
+  }) => _call('setAutoCharge', {
+    'enabled': enabled,
+    'startPct': startPct,
+    'stopPct': stopPct,
+  });
 
   @override
   Future<void> openLockScreenSettings() => _call('openLockScreenSettings');

@@ -293,6 +293,7 @@ class IngestService
         }
         $ctl = is_array($in['controller'] ?? null) ? $in['controller'] : [];
         $pk = is_array($in['allowed_packages'] ?? null) ? $in['allowed_packages'] : [];
+        $battery = is_array($in['battery'] ?? null) ? $in['battery'] : [];
         $station = self::intIn($ctl['station'] ?? null, 1, Site::MAX_STATIONS);
         $status = [
             'mode' => in_array($in['mode'] ?? null, ['demo', 'production', 'unconfigured'], true) ? $in['mode'] : 'unknown',
@@ -308,6 +309,9 @@ class IngestService
                 static fn ($p) => is_string($p) && SiteService::isPackageName($p))),
             'model' => self::str($in['model'] ?? null, 64),
             'android_sdk' => self::intIn($in['android_sdk'] ?? null, 1, 1000),
+            'battery_pct' => self::intIn($battery['pct'] ?? null, 0, 100),
+            'charging' => ($battery['charging'] ?? null) === true,
+            'tap_admin' => ($in['tap_admin'] ?? null) === true,
         ];
         $applied = self::intIn($in['config_version_applied'] ?? null, 0, PHP_INT_MAX);
         $this->updateStatus($device, (string) $bootId, $uptime, $status, $ip, self::str($in['app_version'] ?? null, 32), $applied);
@@ -316,8 +320,7 @@ class IngestService
             $device->update(['station_no' => $station]);
         }
         $cfg = $device->site->currentConfig();
-
-        return ['status' => 200, 'body' => [
+        $body = [
             'ok' => true,
             'server_time' => time(),
             'config' => [
@@ -326,6 +329,26 @@ class IngestService
                 'local_loss_timeout_s' => (int) $cfg->local_loss_timeout_s,
                 'seconds_per_pulse' => (int) $cfg->seconds_per_pulse,
             ],
-        ]];
+        ];
+        // "Open admin" from the dashboard: handed over once (claimed atomically), then cleared.
+        $unlockId = $device->admin_unlock_id;
+        if ($unlockId !== null) {
+            $claimed = Device::whereKey($device->id)->where('admin_unlock_id', $unlockId)
+                ->update(['admin_unlock_id' => null, 'admin_unlock_expires_at' => null]);
+            if ($claimed === 1 && $device->admin_unlock_expires_at?->isFuture()) {
+                $body['admin_unlock'] = ['id' => $unlockId];
+            }
+        }
+
+        // "Enable 10 taps" from the dashboard: handed over once, then cleared.
+        if ($device->tap_admin_expires_at !== null) {
+            $claimed = Device::whereKey($device->id)->whereNotNull('tap_admin_expires_at')
+                ->update(['tap_admin_expires_at' => null]);
+            if ($claimed === 1 && $device->tap_admin_expires_at->isFuture()) {
+                $body['tap_admin'] = true;
+            }
+        }
+
+        return ['status' => 200, 'body' => $body];
     }
 }

@@ -13,7 +13,8 @@ class _MissingNativeBridge extends FakeKioskBridge {
   _MissingNativeBridge() : super(snapshot());
 
   @override
-  Future<KioskState> getState() async => throw KioskException('MissingPluginException');
+  Future<KioskState> getState() async =>
+      throw KioskException('MissingPluginException');
 }
 
 void main() {
@@ -25,29 +26,47 @@ void main() {
       expect(s.preview, isTrue);
       expect(s.deviceOwner, isFalse);
       await b.createPin('482915');
-      expect(() => b.setMode(KioskMode.production), throwsA(isA<KioskException>()));
-      expect(() => b.simulateCoin(1), throwsA(isA<KioskException>()), reason: 'not in demo yet');
+      expect(
+        () => b.setMode(KioskMode.production),
+        throwsA(isA<KioskException>()),
+      );
+      expect(
+        () => b.simulateCoin(1),
+        throwsA(isA<KioskException>()),
+        reason: 'not in demo yet',
+      );
       await b.setMode(KioskMode.demo);
       await b.simulateCoin(5);
       final after = await b.getState();
       expect(after.accessGranted, isTrue);
       expect(after.remainingMs, greaterThan(1190000));
-      expect(() => b.launchApp('preview.sample.video'), throwsA(isA<KioskException>()));
+      expect(
+        () => b.launchApp('preview.sample.video'),
+        throwsA(isA<KioskException>()),
+      );
     });
   });
 
-  testWidgets('missing native layer shows an error instead of spinning forever', (tester) async {
-    await tester.pumpWidget(VendoKioskApp(controller: KioskController(_MissingNativeBridge())));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('load-error')), findsOneWidget);
-    expect(find.textContaining('Android APK'), findsOneWidget);
-  });
+  testWidgets(
+    'missing native layer shows an error instead of spinning forever',
+    (tester) async {
+      await tester.pumpWidget(
+        VendoKioskApp(controller: KioskController(_MissingNativeBridge())),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('load-error')), findsOneWidget);
+      expect(find.textContaining('Android APK'), findsOneWidget);
+    },
+  );
 
   testWidgets('preview banner is shown on the payment screen', (tester) async {
     tester.view.physicalSize = const Size(800, 1280);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
-    final bridge = FakeKioskBridge({...snapshot(mode: 'demo'), 'preview': true});
+    final bridge = FakeKioskBridge({
+      ...snapshot(mode: 'demo'),
+      'preview': true,
+    });
     await tester.pumpWidget(VendoKioskApp(controller: KioskController(bridge)));
     await tester.pumpAndSettle();
     expect(find.textContaining('BROWSER PREVIEW'), findsOneWidget);

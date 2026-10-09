@@ -13,7 +13,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 #[Fillable(['site_id', 'device_type', 'public_id', 'token_hash', 'name', 'hardware_id', 'station_no',
     'revoked_at', 'last_seen_at', 'last_ip', 'sw_version', 'config_version_applied', 'status_json',
-    'status_boot_id', 'status_uptime_ms', 'status_reported_at'])]
+    'status_boot_id', 'status_uptime_ms', 'status_reported_at', 'admin_unlock_id', 'admin_unlock_expires_at', 'tap_admin_expires_at'])]
 #[Hidden(['token_hash'])]
 class Device extends Model
 {
@@ -28,7 +28,25 @@ class Device extends Model
             'last_seen_at' => 'datetime',
             'status_reported_at' => 'datetime',
             'status_json' => 'array',
+            'admin_unlock_expires_at' => 'datetime',
+            'tap_admin_expires_at' => 'datetime',
         ];
+    }
+
+    /** Seconds an "open admin" request waits for the tablet's next heartbeat. */
+    public const ADMIN_UNLOCK_TTL_S = 120;
+
+    public function adminUnlockPending(): bool
+    {
+        return $this->admin_unlock_id !== null && $this->admin_unlock_expires_at?->isFuture() === true;
+    }
+
+    /** Seconds an "enable 10 taps" request waits for the tablet's next heartbeat. */
+    public const TAP_ADMIN_TTL_S = 120;
+
+    public function tapAdminPending(): bool
+    {
+        return $this->tap_admin_expires_at?->isFuture() === true;
     }
 
     public function site(): BelongsTo

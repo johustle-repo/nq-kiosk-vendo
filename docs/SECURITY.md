@@ -63,9 +63,13 @@ internet. The cloud uses `HttpsURLConnection` with the system trust store.
   app that starts it by explicit component would show the stock app drawer.
   Lock task still blocks every unapproved app and Settings from there
   (verified on the Android 14 emulator); Home returns to the kiosk.
-* **Accounts and app stores.** Production blocks adding accounts
-  (`DISALLOW_MODIFY_ACCOUNTS`), so no customer's Google account can stay on the
-  kiosk. Settings, the Play Store and package installers can never be approved
+* **Accounts and app stores.** By default customers may sign in (admin switch
+  "Allow Facebook and Google sign-in"), because blocking accounts
+  (`DISALLOW_MODIFY_ACCOUNTS`) also breaks Facebook/Google login in games and
+  social apps. A login can then stay on the tablet for the next customer; turn
+  the switch off to block sign-in. During paid time the default browser,
+  Chrome, Facebook, Play Games and the Google services framework are
+  allowlisted as sign-in helpers (`KioskPolicy.sessionHelpers`). Settings, the Play Store and package installers can never be approved
   (`RestrictedApps`), even from the dashboard. Android shows its "disabled by
   your admin" explanation through Settings, which stays blocked, so an approved
   app that tries to sign in shows "Settings is not available". Do not approve
