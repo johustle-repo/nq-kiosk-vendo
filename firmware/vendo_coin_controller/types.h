@@ -32,6 +32,7 @@ struct Station {
   String pairedPhoneId;
   uint32_t lastCmdCounter = 0;
   uint64_t lastPhonePollMs = 0;
+  bool chargeWanted = false;  // tablet asked for the charger relay (battery low)
 };
 
 enum EventType : uint8_t {

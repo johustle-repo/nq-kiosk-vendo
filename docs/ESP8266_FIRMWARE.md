@@ -18,7 +18,15 @@ Prebuilt binaries (no secrets inside): `dist/firmware/*.bin`.
 | LCD SDA | GPIO4 | **D2** | I2C data |
 | LCD SCL | GPIO14 | **D5** | I2C clock |
 | Pair/setup button | GPIO0 | D3 (on-board FLASH) | press only after boot |
+| Charger relay IN | GPIO12 | **D6** | firmware 2.2.0+; active-LOW module by default (`CHARGE_RELAY_ACTIVE_LOW`) |
 | GND | GND | G | **common ground for everything** |
+
+**Charger relay (D6):** each tablet sends `charge/on` when its battery drops
+below the start level (Admin → Coin box → Charger relay, default 20%) and
+`charge/off` at the stop level (default 90%). The relay is on while any paired
+tablet wants it, and the request is saved, so a restart keeps charging. Run the
+charger's mains or 5 V line through the relay's COM/NO contacts. Serial
+`relay=on`, `relay=off` and `relay=auto` test the wiring.
 
 The firmware calls `Wire.begin(4, 14)` before `lcd.init()` so the LCD library
 does not grab the ESP8266's default SCL pin (GPIO5 = D1, the coin input).

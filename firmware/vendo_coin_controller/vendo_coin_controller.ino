@@ -98,9 +98,11 @@ bool resumedFromCheckpoint = false;
 uint32_t heldPulses = 0;
 // Where the next coins go: 0 = nobody (coins are held).
 uint8_t selStation = 0;
+uint32_t selTtlS = 0;  // lifetime of the current selection, renewed by each coin
 uint64_t selUntilMs = 0;
 uint32_t selVersionApplied = 0;  // dashboard selection version last applied
 uint8_t lastCoinStation = 0;     // for the LCD "last coin" line
+int8_t relayOverride = -1;       // serial "relay=on/off" test: -1 = automatic
 uint32_t lastCoinPulses = 0;
 
 // Dashboard commands applied (ring, persisted) and waiting to be acknowledged.
@@ -270,6 +272,7 @@ bool saveSettings() {
   for (uint8_t i = 1; i <= MAX_STATIONS; i++) {
     f.printf("pair_key_%u=%s\n", i, stations[i].pairKeyHex.c_str());
     f.printf("paired_phone_%u=%s\n", i, stations[i].pairedPhoneId.c_str());
+    f.printf("charge_%u=%u\n", i, stations[i].chargeWanted ? 1 : 0);
   }
   f.printf("seconds_per_pulse=%lu\n", (unsigned long)settings.secondsPerPulse);
   f.printf("rate_version=%lu\n", (unsigned long)settings.rateVersion);
@@ -301,6 +304,7 @@ void loadSettings() {
     else if (k == "paired_phone") stations[1].pairedPhoneId = v;
     else if (k.startsWith("pair_key_") && validStation(k.substring(9).toInt())) stations[k.substring(9).toInt()].pairKeyHex = v;
     else if (k.startsWith("paired_phone_") && validStation(k.substring(13).toInt())) stations[k.substring(13).toInt()].pairedPhoneId = v;
+    else if (k.startsWith("charge_") && validStation(k.substring(7).toInt())) stations[k.substring(7).toInt()].chargeWanted = v == "1";
     else if (k == "seconds_per_pulse") {
       uint32_t s = v.toInt();
       if (s >= 10 && s <= 3600) settings.secondsPerPulse = s;
@@ -314,6 +318,25 @@ void loadSettings() {
     }
   }
   f.close();
+}
+
+// ============================================================ charger relay (D6)
+bool chargeRelayOn() {
+  if (relayOverride >= 0) return relayOverride == 1;
+  for (uint8_t i = 1; i <= MAX_STATIONS; i++) {
+    if (stations[i].chargeWanted && stations[i].pairKeyHex.length()) return true;
+  }
+  return false;
+}
+
+void applyChargeRelay() {
+  static int8_t applied = -1;
+  const bool on = chargeRelayOn();
+  digitalWrite(CHARGE_RELAY_PIN, (on != (bool)CHARGE_RELAY_ACTIVE_LOW) ? HIGH : LOW);
+  if (applied != (int8_t)on) {
+    applied = on;
+    Serial.printf("[relay] charger %s\n", on ? "ON" : "OFF");
+  }
 }
 
 // ============================================================ tablets (authoritative time)
@@ -353,6 +376,7 @@ uint32_t selectionTtlS() { return selectionActive() ? (uint32_t)((selUntilMs - m
 
 void setSelection(uint8_t n, uint32_t ttlS) {
   selStation = validStation(n) && ttlS ? n : 0;
+  selTtlS = selStation ? ttlS : 0;
   selUntilMs = selStation ? millis64() + (uint64_t)ttlS * 1000ULL : 0;
   Serial.printf("[select] next coins -> %s\n", selStation ? ("tablet " + String(selStation)).c_str() : "held");
 }
@@ -463,7 +487,7 @@ void creditCoin(uint32_t pulses) {
   const uint8_t target = coinTarget();
   if (target) {
     lastCoinStation = target;
-    if (selectionActive()) selUntilMs = millis64() + SELECTION_TTL_S * 1000ULL;  // keep it while coins keep coming
+    if (selectionActive()) selUntilMs = millis64() + (uint64_t)selTtlS * 1000ULL;  // keep it while coins keep coming
     addTime(target, pulses, pulses * settings.secondsPerPulse, EV_CREDIT, 0);
     return;
   }
@@ -670,7 +694,33 @@ bool timeValid() { return time(nullptr) > 1700000000; }
 // POSTs JSON to url; returns the HTTP status (negative on transport error).
 // Poll, sync and the status upload share this connection, so the TLS handshake
 // is paid once and each request takes ~0.1-0.5 s.
+// Small TLS buffers (BearSSL then asks the server for 4 KB records with the
+// max fragment length extension). Our server supports it, but only when the
+// client sends the host name (SNI), which real connections do; the library's
+// probe does not, so it is not used. If HTTPS keeps failing with small
+// buffers, go back to full-size buffers for this boot.
+bool tlsSmallBuffers = true;
+uint8_t tlsFailures = 0;
+
+void noteTlsResult(int code) {
+  if (code > 0) {
+    tlsFailures = 0;
+    return;
+  }
+  if (!tlsSmallBuffers || !WiFi.isConnected() || code == -101) return;
+  if (++tlsFailures >= 4) {
+    tlsSmallBuffers = false;
+    netClient.setBufferSizes(16384, TLS_TX_BUFFER);
+    Serial.println("[net] HTTPS failing with small TLS buffers: using full size until restart");
+  }
+}
+
 int httpsPost(const String &url, const String &body, const String &bearer, String &response) {
+  if (ESP.getMaxFreeBlockSize() < TLS_MIN_FREE_BLOCK && !netClient.connected()) {
+    Serial.printf("[net] low memory (largest block %u B), cloud call skipped\n", ESP.getMaxFreeBlockSize());
+    response = String();
+    return -101;
+  }
   netClient.setX509Time(time(nullptr));
   if (!netHttp.begin(netClient, url)) return -100;
   netHttp.addHeader("Content-Type", "application/json");
@@ -678,6 +728,7 @@ int httpsPost(const String &url, const String &body, const String &bearer, Strin
   const int code = netHttp.POST((uint8_t *)body.c_str(), body.length());
   response = code > 0 ? netHttp.getString() : String();  // read fully so the connection can be reused
   netHttp.end();  // keeps the socket open when the server allows keep-alive
+  noteTlsResult(code);
   if (code < 0) {
     char err[80];
     netClient.getLastSSLError(err, sizeof(err));
@@ -980,8 +1031,8 @@ bool statusUpload() {
   const int code = httpsPost(settings.statusUrl, String(body), settings.statusToken, resp);
   const bool ok = code == 200 && resp.indexOf("\"saved\"") >= 0;
   if (code > 0) {
-    Serial.printf("[status] upload #%lu: HTTP %d in %lu ms%s\n", (unsigned long)statusSequence, code,
-                  (unsigned long)(millis() - started), ok ? "" : " (not saved)");
+    Serial.printf("[status] upload #%lu: HTTP %d in %lu ms, heap %u/%u B%s\n", (unsigned long)statusSequence, code,
+                  (unsigned long)(millis() - started), ESP.getFreeHeap(), ESP.getMaxFreeBlockSize(), ok ? "" : " (not saved)");
     if (code == 401 || code == 403) {
       statusState = CLOUD_UNAUTHORIZED;
       Serial.printf("[status] server says: %s\n", resp.substring(0, 160).c_str());  // never contains our token
@@ -1088,6 +1139,7 @@ void handleStatus() {
   b += ",\"selected_station\":" + String(coinTarget());
   b += ",\"selected_ttl_s\":" + String(selectionTtlS());
   b += ",\"held_pulses\":" + String(heldPulses);
+  b += ",\"charge_relay\":" + String(chargeRelayOn() ? "true" : "false");
   b += ",\"resumed\":" + String(resumedFromCheckpoint ? "true" : "false");
   b += ",\"cloud\":\"" + String(cloudStateName(pollState)) + "\"";
   b += ",\"status_upload\":\"" + String(cloudStateName(statusState)) + "\"";
@@ -1153,13 +1205,46 @@ void handleEndSession() {
   sendJson(200, "{\"ok\":true}");
 }
 
+// POST /api/v1/select — a player tapped "Insert coin" on tablet N: the next
+// coins go to it. First come, first served: while another tablet's claim (or
+// the attendant's selection) is active the answer is 409 busy.
+void handleSelect() {
+  const uint8_t n = verifyCommand("select");
+  if (!n) return;
+  if (selectionActive() && selStation != n) {
+    sendJson(409, "{\"ok\":false,\"error\":\"busy\",\"selected_station\":" + String(selStation) +
+                      ",\"ttl_s\":" + String(selectionTtlS()) + "}");
+    return;
+  }
+  setSelection(n, TABLET_CLAIM_TTL_S);
+  reportSoon();  // the dashboard shows who is inserting coins
+  sendJson(200, "{\"ok\":true,\"station\":" + String(n) + ",\"ttl_s\":" + String(selectionTtlS()) + "}");
+}
+
+// POST /api/v1/charge/on | /api/v1/charge/off: tablet N's battery is low /
+// charged again. The relay is on while any paired tablet wants it; the request
+// is saved, so a restart keeps charging a flat tablet.
+void handleCharge(bool on) {
+  const uint8_t n = verifyCommand(on ? "charge_on" : "charge_off");
+  if (!n) return;
+  if (stations[n].chargeWanted != on) {
+    stations[n].chargeWanted = on;
+    saveSettings();
+    Serial.printf("[relay] tablet %u %s charging\n", n, on ? "requests" : "no longer needs");
+  }
+  applyChargeRelay();
+  sendJson(200, "{\"ok\":true,\"relay\":" + String(chargeRelayOn() ? "true" : "false") + "}");
+}
+
 void handleUnpair() {
   const uint8_t n = verifyCommand("unpair");
   if (!n) return;
   sendJson(200, "{\"ok\":true}");
   stations[n].pairKeyHex = "";
   stations[n].pairedPhoneId = "";
+  stations[n].chargeWanted = false;
   saveSettings();
+  applyChargeRelay();
 }
 
 // ============================================================ setup portal (Wi-Fi + cloud enrollment)
@@ -1309,6 +1394,9 @@ void startWifi() {
   server.on("/api/v1/pair", HTTP_POST, handlePair);
   server.on("/api/v1/session/end", HTTP_POST, handleEndSession);
   server.on("/api/v1/unpair", HTTP_POST, handleUnpair);
+  server.on("/api/v1/select", HTTP_POST, handleSelect);
+  server.on("/api/v1/charge/on", HTTP_POST, []() { handleCharge(true); });
+  server.on("/api/v1/charge/off", HTTP_POST, []() { handleCharge(false); });
   server.onNotFound([]() { sendError(404, "not_found"); });
   server.begin();
 }
@@ -1322,6 +1410,8 @@ void setup() {
   bootId = randomHex(4);
 
   pinMode(BUTTON_PIN, INPUT_PULLUP);
+  digitalWrite(CHARGE_RELAY_PIN, CHARGE_RELAY_ACTIVE_LOW ? HIGH : LOW);  // off until settings are loaded
+  pinMode(CHARGE_RELAY_PIN, OUTPUT);
 
   if (!LittleFS.begin()) {
     Serial.println("[fs] mount failed, formatting");
@@ -1330,6 +1420,7 @@ void setup() {
   }
   loadSettings();
   restoreCheckpoint();
+  applyChargeRelay();
 
   initLcd();  // I2C on D2/D5 must be set up before the coin pin interrupt
 
@@ -1340,6 +1431,7 @@ void setup() {
   snprintf(statusBootId, sizeof(statusBootId), "%06lx-%08lx-%08lx", (unsigned long)ESP.getChipId(),
            (unsigned long)ESP.random(), (unsigned long)ESP.random());
   netClient.setTrustAnchors(trustAnchors);  // verified HTTPS, never setInsecure()
+  netClient.setBufferSizes(TLS_RX_BUFFER, TLS_TX_BUFFER);  // see noteTlsResult
   netClient.setSession(&netSession);
   netClient.setTimeout(HTTP_TIMEOUT_MS);
   netHttp.setReuse(true);
@@ -1383,6 +1475,7 @@ void openPairingWindow() {
 //   status                    → print every tablet's time, selection and held coins
 //   select=N                  → next coins go to tablet N (0 = hold)
 //   enroll=XXXXX-XXXXX        → enroll with a one-time coin box code from the dashboard
+//   relay=on | off | auto     → test the D6 charger relay (not saved; auto = tablets decide)
 //   status_token=<token>      status_device_id=<id>      status_url=https://...
 // Values are saved to flash; the token is never printed back.
 void serialConfigLoop() {
@@ -1409,13 +1502,18 @@ void serialConfigLoop() {
                     cloudStateName(statusState), coinTarget() ? ("tablet " + String(coinTarget()) + (selectionActive() ? "" : " (only paired tablet)")).c_str() : "held",
                     (unsigned long)selectionTtlS(), (unsigned long)heldPulses);
       for (uint8_t i = 1; i <= MAX_STATIONS; i++) {
-        Serial.printf("[status] tablet %u: %s remaining %lu s, session %lu, last %lu pulse(s), paired %s\n", i,
+        Serial.printf("[status] tablet %u: %s remaining %lu s, session %lu, last %lu pulse(s), paired %s%s\n", i,
                       remainingSeconds(i) ? "running" : "idle", (unsigned long)remainingSeconds(i),
                       (unsigned long)stations[i].sessionNo, (unsigned long)stations[i].lastPulses,
-                      stations[i].pairKeyHex.length() ? "yes" : "no");
+                      stations[i].pairKeyHex.length() ? "yes" : "no", stations[i].chargeWanted ? ", wants charging" : "");
       }
+      Serial.printf("[status] charger relay (D6) %s%s\n", chargeRelayOn() ? "ON" : "OFF",
+                    relayOverride >= 0 ? " (serial test)" : "");
     } else if (key == "select") {
       setSelection(value.toInt(), SELECTION_TTL_S);
+    } else if (key == "relay" && (value == "on" || value == "off" || value == "auto")) {
+      relayOverride = value == "auto" ? -1 : (value == "on" ? 1 : 0);
+      applyChargeRelay();
     } else if (key == "enroll" && value.length() >= 10 && value.length() <= 16) {
       // Same as the setup portal's enrollment field: a one-time coin box code from the dashboard.
       settings.enrollCode = value;

@@ -3,7 +3,7 @@
 // are NOT here; they are set through the setup portal or the cloud dashboard.
 #pragma once
 
-#define FW_VERSION "2.0.0"
+#define FW_VERSION "2.2.1"
 // Local phone protocol 2: one coin box, up to MAX_STATIONS tablets, per-tablet keys.
 #define PROTOCOL_VERSION 2
 
@@ -12,6 +12,9 @@
 // An attendant's "next coins -> tablet N" lasts this long after the selection
 // or the last coin, so a forgotten selection cannot misroute later coins.
 #define SELECTION_TTL_S 90UL
+// A player tapping "Insert coin" on a tablet claims the coin box for this long
+// (renewed by each coin). Other tablets get "busy" until it ends.
+#define TABLET_CLAIM_TTL_S 60UL
 // Largest single free-time grant accepted from the dashboard.
 #define MAX_ADMIN_CREDIT_S (4UL * 3600UL)
 
@@ -21,6 +24,12 @@
 #define LCD_SDA_PIN 4   // D2 / GPIO4
 #define LCD_SCL_PIN 14  // D5 / GPIO14
 #define BUTTON_PIN 0    // D3 / GPIO0  — on-board FLASH button (press only AFTER boot)
+// Charger relay: on while any tablet reports a low battery (the tablet asks
+// below its "start charging" level and releases it when charged).
+#define CHARGE_RELAY_PIN 12  // D6 / GPIO12 — relay module IN
+// Most blue 1-channel relay modules switch on when IN is pulled LOW. Set 0 for
+// a module (or MOSFET board) that switches on when IN is HIGH.
+#define CHARGE_RELAY_ACTIVE_LOW 1
 
 // If your coin slot output is open-collector and you have no external pull-up
 // to 3.3 V, enable the ESP8266's weak internal pull-up (~30-100 kΩ).
@@ -66,7 +75,15 @@
 #define APPLIED_CMD_RING 16
 #define MIN_SYNC_GAP_MS 3000UL          // earliest re-sync after a coin
 #define CLOUD_BACKOFF_MAX_S 300UL
-#define HTTP_TIMEOUT_MS 8000
+// Short, because the tablets' local requests wait while a cloud call runs.
+#define HTTP_TIMEOUT_MS 5000
+// TLS receive buffer, with the max fragment length extension (saves
+// ~12 KB of heap per connection; a full 16 KB buffer ran the heap out).
+#define TLS_RX_BUFFER 4096
+#define TLS_TX_BUFFER 512
+// Skip a cloud call (retried later) when the largest free heap block is
+// smaller than this: a TLS handshake without memory can crash the Wi-Fi stack.
+#define TLS_MIN_FREE_BLOCK 12000
 
 // Unsent cloud events kept in RAM. On overflow the OLDEST event is dropped
 // and dropped_events is incremented (reported to the dashboard). Local paid
