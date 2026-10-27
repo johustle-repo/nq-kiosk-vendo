@@ -3,12 +3,15 @@
 // are NOT here; they are set through the setup portal or the cloud dashboard.
 #pragma once
 
-#define FW_VERSION "2.2.1"
+#define FW_VERSION "2.4.0"
 // Local phone protocol 2: one coin box, up to MAX_STATIONS tablets, per-tablet keys.
 #define PROTOCOL_VERSION 2
 
 // ---------------------------------------------------------------- tablets
-#define MAX_STATIONS 4
+// Each kiosk tablet has its own coin box: it serves one tablet (its station 1),
+// and every coin goes to that tablet. Enroll the box on the dashboard with the
+// tablet's number. Set 4 to build a coin box shared by up to 4 tablets.
+#define MAX_STATIONS 1
 // An attendant's "next coins -> tablet N" lasts this long after the selection
 // or the last coin, so a forgotten selection cannot misroute later coins.
 #define SELECTION_TTL_S 90UL
@@ -30,6 +33,9 @@
 // Most blue 1-channel relay modules switch on when IN is pulled LOW. Set 0 for
 // a module (or MOSFET board) that switches on when IN is HIGH.
 #define CHARGE_RELAY_ACTIVE_LOW 1
+// On-board blue LED (active LOW): on while the coin box is not on the shop
+// Wi-Fi, so a box without an LCD still shows that it needs setting up.
+#define STATUS_LED_PIN 2  // D4 / GPIO2
 
 // If your coin slot output is open-collector and you have no external pull-up
 // to 3.3 V, enable the ESP8266's weak internal pull-up (~30-100 kΩ).
@@ -109,10 +115,23 @@
 // ---------------------------------------------------------------- pairing / admin
 #define PAIRING_WINDOW_MS 120000UL
 #define PAIRING_MAX_ATTEMPTS 5
-#define BUTTON_INFO_MAX_MS 1000UL    // short press: next tablet selection (offline fallback)
+#define BUTTON_INFO_MAX_MS 1000UL    // short press: next tablet selection (shared box) / show IP (one tablet)
 #define BUTTON_INFO_HOLD_MS 1000UL   // hold 1-3 s: show IP / device ID
 #define BUTTON_PAIR_HOLD_MS 3000UL   // hold 3 s: open phone pairing window
-#define BUTTON_SETUP_HOLD_MS 10000UL // hold 10 s: restart into Wi-Fi setup portal
+#define BUTTON_SETUP_HOLD_MS 10000UL // hold 10 s: show the hotspot name and password on the LCD
+
+// ---------------------------------------------------------------- admin hotspot
+// The coin box always runs its own WPA2 hotspot ("VendoCoin-xxxxxx") next to
+// the shop Wi-Fi. Its settings page (http://192.168.4.1) is only served to
+// devices joined to the hotspot, never over the shop Wi-Fi.
+#define HOTSPOT_MAX_CLIENTS 2
+#define HOTSPOT_PASS_MIN 8
+#define HOTSPOT_PASS_MAX 15  // fits the 20-column LCD after "Pass:"
+// While someone is on the hotspot and the shop Wi-Fi has been unreachable this
+// long, stop retrying it: the ESP8266's reconnect scans hop channels and make
+// the hotspot drop. Retrying resumes when the hotspot is empty or on save.
+#define STA_PAUSE_AFTER_MS 30000UL
+#define HOTSPOT_INFO_SHOW_MS 60000UL
 
 // ---------------------------------------------------------------- LCD
 #define LCD_COLS 20

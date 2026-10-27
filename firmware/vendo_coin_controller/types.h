@@ -7,6 +7,7 @@
 struct Settings {
   String wifiSsid;
   String wifiPass;
+  String hotspotPass;  // admin hotspot WPA2 password (secret); generated on first boot
   String deviceName = "Coin controller";
   String apiBase = DEFAULT_API_BASE;
   String cloudToken;      // per-device credential from enrollment (secret)

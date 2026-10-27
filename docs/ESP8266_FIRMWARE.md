@@ -19,6 +19,7 @@ Prebuilt binaries (no secrets inside): `dist/firmware/*.bin`.
 | LCD SCL | GPIO14 | **D5** | I2C clock |
 | Pair/setup button | GPIO0 | D3 (on-board FLASH) | press only after boot |
 | Charger relay IN | GPIO12 | **D6** | firmware 2.2.0+; active-LOW module by default (`CHARGE_RELAY_ACTIVE_LOW`) |
+| Status LED | GPIO2 | D4 (on-board blue LED) | firmware 2.4.0+; on while the box is not on the shop Wi-Fi |
 | GND | GND | G | **common ground for everything** |
 
 **Charger relay (D6):** each tablet sends `charge/on` when its battery drops
@@ -97,9 +98,28 @@ Rates: ₱1 (1 pulse) = 4 min, ₱5 = 20 min, ₱10 = 40 min, ₱20 = 80 min —
 acceptor is set to one pulse per peso, and the kiosk UI and LCD say "peso".
 Coins during a session extend it.
 
-## One coin box, up to four tablets (firmware 2.0)
+## One coin box per tablet (firmware 2.4.0, the default)
 
-The box keeps a separate timer for tablets 1–4. Each coin goes to:
+Each kiosk tablet has its own ESP8266 coin box, built with `MAX_STATIONS 1`
+(`config.h`). The box serves exactly one tablet, which pairs with it as
+**Tablet 1** (Admin → Coin box). Every coin goes straight to that tablet; coins
+inserted while no tablet is paired are held and can be given to it from the
+dashboard.
+
+On the dashboard, enroll each box with **the same tablet number as its
+tablet** (site page → Enroll a device → Coin box → Tablet N). The dashboard
+stores the box's station 1 under that number, sends that tablet's
+*add time / end session* to its box, and shows the box (Wi-Fi, IP, firmware,
+held coins) on the tablet's card. There is no "next coins go to" selection.
+
+Upgrading a shared box to 2.4.0 keeps only the tablet paired as Tablet 1;
+re-enroll it on the dashboard with that tablet's number, and give every other
+tablet its own box.
+
+## One coin box shared by up to four tablets (firmware 2.0, `MAX_STATIONS 4`)
+
+Build with `#define MAX_STATIONS 4` and enroll the box with **Shared by all
+tablets**. The box keeps a separate timer for tablets 1–4. Each coin goes to:
 
 1. the tablet the attendant selected on the dashboard (lasts 90 s, each coin
    extends it), or the one chosen with the FLASH button when offline;
@@ -121,20 +141,25 @@ VeNdO  Insert: Tab 2   ← attendant selection; "INSERT COIN" with one tablet, "
 Held: ₱5 ask staff     ← or "Last: ₱5 Tab 2" (₱ is a custom LCD character)
 ```
 
+With one tablet per box (the default) row 1 is `Time left: 0:12:34` (or
+`Tablet not paired`) and row 3 drops the tablet number.
+
 Only changed rows are rewritten; the screen is cleared once at start-up.
 Pairing mode → `PAIR CODE: nnnnnn`, the IP, "Enter on the tablet"; hold FLASH
-1–3 s → the IP for 10 s; setup mode shows the access-point name and password.
+1–3 s → the IP for 10 s; first setup and FLASH held 10 s show the hotspot name
+and password.
 
 ## FLASH button and USB serial
 
 | Action | Effect |
 |---|---|
-| short press | next coins → next tablet (1 → 2 → 3 → 4 → held), 90 s |
+| short press | one-tablet box: show IP on the LCD · shared box: next coins → next tablet (1 → 2 → 3 → 4 → held), 90 s |
 | hold 1–3 s | show IP on the LCD |
 | hold 3 s | open the 2-minute tablet pairing window |
-| hold 10 s | restart into Wi-Fi setup (time is checkpointed first) |
+| hold 10 s | show the admin hotspot name and password on the LCD for 60 s |
 
-Serial (115200 baud): `pair`, `status` (all tablets, selection, held coins),
+Serial (115200 baud): `pair`, `hotspot` (hotspot name and password), `status`
+(shop Wi-Fi, all tablets, selection, held coins),
 `select=N` (0 = hold), `status_token=…`, `status_device_id=…`, `status_url=…`.
 
 ## Building and flashing
@@ -157,21 +182,42 @@ Or flash a prebuilt binary with esptool:
 Upgrading from 1.x keeps Wi-Fi, cloud enrollment and the paired phone, which
 becomes **tablet 1**; the tablet app must be the protocol 2 version.
 
+## Admin hotspot
+
+The coin box always runs its own WPA2 hotspot `VendoCoin-xxxxxx` next to the
+shop Wi-Fi. Join it with a phone and open `http://192.168.4.1`. The page has
+three tabs:
+
+* **Wi-Fi**: the shop network it is on, connection status, IP and signal; scan,
+  choose a network and **Save and connect** (no restart, paid time keeps running).
+* **Pair tablet**: **Generate pairing code** shows the 6-digit code (also on the
+  LCD, valid 2 minutes), the coin box IP to enter on the tablet, and which tablet
+  numbers are paired.
+* **Settings**: coin box name, dashboard enrollment code, API URL, `status.php`
+  upload, and the hotspot password (8–15 characters).
+
+The page is served only to devices on the hotspot, never over the shop Wi-Fi.
+On first boot the hotspot password is a random 8-digit number; change it in the
+Settings tab. Forgot it: hold FLASH **10 s** to show it on the LCD (or serial
+`hotspot`). While someone is on the hotspot and the shop Wi-Fi has been
+unreachable for 30 s, the coin box stops retrying it so the hotspot stays
+stable; it retries when the hotspot is empty or on **Save and connect**.
+
 ## First-time setup
 
-1. Power on. With no Wi-Fi saved the LCD shows `WIFI SETUP MODE`, an access
-   point `VendoCoin-xxxxxx` and an 8-digit password.
-2. Join that Wi-Fi with a phone/laptop, open `http://192.168.4.1`.
-3. Enter your shop Wi-Fi name/password, a controller name, and (optionally) a
-   **coin controller enrollment code** from the dashboard. Save → it restarts.
+1. Power on. With no Wi-Fi saved the LCD shows `WIFI SETUP`, the hotspot
+   `VendoCoin-xxxxxx` and its password.
+2. Join that hotspot with a phone/laptop, open `http://192.168.4.1`.
+3. **Wi-Fi** tab: pick your shop Wi-Fi, enter its password, **Save and connect**.
+   **Settings** tab: a coin box name, (optionally) a **coin box enrollment
+   code** from the dashboard, and a new hotspot password.
 4. Give the controller a fixed IP: create a **DHCP reservation** for its MAC in
-   your router (recommended), so the phone always finds it.
-5. Pair each tablet: hold FLASH **3 s** to show the pairing code and IP; on the
-   tablet: Admin → Coin box → choose its **tablet number** → enter IP and code.
-   Pairing a number again replaces only that tablet.
+   your router (recommended), so the tablets always find it.
+5. Pair each tablet: **Pair tablet** tab → **Generate pairing code** (or hold
+   FLASH **3 s**); on the tablet: Admin → Coin box → choose its **tablet
+   number** → enter IP and code. Pairing a number again replaces only that tablet.
 
-To change Wi-Fi later, hold FLASH **10 s** (restarts into setup mode). Paid time
-is checkpointed first.
+To change Wi-Fi later, use the hotspot's Wi-Fi tab.
 
 ## Switching from the original `status.php` sketch (firmware 1.1.0)
 
@@ -193,21 +239,21 @@ Steps:
    plain text). Update it wherever `status.php` checks it.
 2. Flash `dist/firmware/vendo_coin_controller-1.1.0-nodemcuv2.bin` (or
    `-d1_mini.bin`), or build `firmware/vendo_coin_controller` in Arduino IDE.
-3. The LCD shows `WIFI SETUP MODE`, an access point `VendoCoin-xxxxxx` and its
-   password. Join it, open `http://192.168.4.1` and fill in:
+3. The LCD shows `WIFI SETUP`, the hotspot `VendoCoin-xxxxxx` and its
+   password. Join it, open `http://192.168.4.1` and fill in (Wi-Fi and Settings tabs):
    * Wi-Fi name and password;
    * **Upload to existing status.php**: URL (pre-filled
      `https://vendo-kiosk.ebnleadgen.online/api/status.php`), device ID
      (`vendo-001`), and the **new** 64-character upload token;
    * leave "Cloud enrollment code" empty unless you deploy the `/api/v1` dashboard.
-4. Save. After restart the serial log (115200 baud) shows
+4. Save. Once connected the serial log (115200 baud) shows
    `[status] upload #1: HTTP 200 in … ms`. A coin should appear in the browser
    demo within about 1–2 seconds.
-5. Pair the phone: short-press FLASH → LCD shows the IP; hold FLASH 3 s → LCD
-   shows a 6-digit code; on the phone: Admin → Coin controller → enter both.
+5. Pair the phone: hotspot **Pair tablet** tab → **Generate pairing code** (or
+   hold FLASH 3 s); on the phone: Admin → Coin box → enter the IP and code.
 6. Give the controller a DHCP reservation in the router so its IP stays the same.
 
-Changing the upload settings without setup mode: connect USB, open a serial
+Changing the upload settings without the hotspot: connect USB, open a serial
 terminal at 115200 baud and send one line (the value is saved to flash and
 never printed back):
 

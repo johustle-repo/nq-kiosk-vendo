@@ -41,10 +41,12 @@ Device Owner, in demo mode). Re-enable production from the same screen.
 | Kiosk shows only the logo | Normal: with no paid time the logo is shown after the idle delay (Admin → System → Screen, default 1 min; *Never* turns it off). Touch it to return to the payment screen, or insert a coin. |
 | Screen is black / off | The kiosk keeps the display on while it is in front. Check that the phone is charging (*stay awake while charging* is set in production) and that no PIN/pattern lock is set. |
 | Phone shows a lock screen after waking | Remove the PIN/pattern (Settings → Security → Screen lock → None). A swipe-only lock is dismissed automatically; production mode disables it via Device Owner. |
-| "Coin controller: not paired" | Admin → Coin controller → pair (hold FLASH 3 s for the code). |
-| "connecting…" forever | Wrong IP, phone on a different Wi-Fi/guest network with client isolation, or controller offline. Short-press FLASH to read the IP on the LCD; use a DHCP reservation. |
+| "Coin controller: not paired" | Admin → Coin box → pair (code from the coin box hotspot's Pair tablet tab, or hold FLASH 3 s). |
+| Pairing says "The controller did not answer in time" | Admin → **Wi-Fi** → *Test connection* explains the cause (different network, router "AP/client isolation", wrong IP). Admin → Coin box → *Find coin box* searches the tablet's Wi-Fi and fills in the IP and tablet number. Join the right network from Admin → Wi-Fi (Settings is hidden in the kiosk). |
+| "connecting…" forever | Tablet on a different Wi-Fi than the coin box (compare the coin box Wi-Fi on the dashboard), guest network with client isolation, or coin box offline. A tablet on the same Wi-Fi finds a coin box whose IP changed by itself within about a minute. The dashboard shows the coin box IP; use a DHCP reservation. |
 | "disconnected (Ns)" and customers locked out | Local link lost longer than the loss timeout. Check Wi-Fi signal and power at the controller. Access returns automatically when reports resume. |
-| Pairing says "Wrong pairing code" / "Pairing is not open" | The code is valid for 2 minutes and 5 attempts; hold FLASH 3 s again. |
+| Pairing says "Wrong pairing code" / "Pairing is not open" | The code is valid for 2 minutes and 5 attempts; generate a new one on the hotspot (or hold FLASH 3 s). |
+| Coin box not on Wi-Fi | Join its hotspot `VendoCoin-xxxxxx`, open `http://192.168.4.1`, Wi-Fi tab. Forgot the hotspot password: hold FLASH 10 s to show it on the LCD. |
 | After controller restart customers lost time | `RESUME_AFTER_RESTART` set to 0, or the session expired during the outage. |
 | "Production mode requires … Device Owner" | Not provisioned. See `DEVICE_OWNER_PROVISIONING.md`. There is no automatic fallback. |
 | Kiosk starts to the TECNO launcher after reboot | Production not enabled, or HiOS reset the default home. Open the app, Admin → Kiosk mode → check *policy problems*; report this in the physical test log. |

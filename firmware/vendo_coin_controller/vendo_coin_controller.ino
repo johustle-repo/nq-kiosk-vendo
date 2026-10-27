@@ -1,14 +1,18 @@
 /*
-  Vendo Kiosk — ESP8266 coin controller (one coin box, up to 4 tablets)
-  =====================================================================
+  Vendo Kiosk — ESP8266 coin controller (one coin box per tablet, or shared)
+  ==========================================================================
   Board:   NodeMCU 1.0 (ESP-12E) or LOLIN(WEMOS) D1 mini, ESP8266 Arduino core 3.1.x
   Libs:    LiquidCrystal_I2C 1.1.x (Frank de Brabander). No JSON library needed.
 
-  This controller is the AUTHORITY for paid time on every tablet it serves:
+  This controller is the AUTHORITY for paid time on every tablet it serves.
+  Built with MAX_STATIONS 1 (the default), it is one kiosk's own coin box and
+  every coin goes to its paired tablet. Built with MAX_STATIONS 4, one box is
+  shared by up to 4 tablets:
    - counts coin pulses (IRAM interrupt), groups them into one coin, and credits
-     them to the tablet the attendant selected on the dashboard (or the FLASH
-     button when offline). Coins with no selection are HELD, never lost, until
-     the attendant assigns them;
+     them to its only paired tablet, or on a shared box to the tablet the
+     attendant selected on the dashboard (or the FLASH button when offline).
+     Coins with nowhere to go are HELD, never lost, until the attendant assigns
+     them;
    - keeps an independent timer per tablet (station 1..MAX_STATIONS);
    - serves an authenticated local HTTP API so each paired tablet can read its
      own remaining time (responses are HMAC-signed with that tablet's key over
@@ -76,7 +80,6 @@ Station stations[MAX_STATIONS + 1];  // index 1..MAX_STATIONS (0 unused)
 
 static const char *SETTINGS_FILE = "/settings.txt";
 static const char *SESSION_FILE = "/session.txt";
-static const char *FORCE_SETUP_FILE = "/force_setup";
 
 // ============================================================ runtime state
 LiquidCrystal_I2C *lcd = nullptr;
@@ -86,8 +89,12 @@ BearSSL::X509List *trustAnchors = nullptr;
 String deviceId;  // "vk-" + chip id
 String bootId;    // random per boot: lets the tablets and cloud detect restarts
 
-bool setupMode = false;
-String apPassword;
+// Admin hotspot (always on) and the shop Wi-Fi connection.
+String adminFormToken;           // random per boot, required by every settings form (CSRF)
+bool staPaused = false;          // shop Wi-Fi retries paused while the hotspot is in use
+uint64_t staDownSinceMs = 0;
+uint64_t hotspotRestartAtMs = 0; // apply a new hotspot password after the reply is sent
+uint64_t hotspotInfoUntilMs = 0; // FLASH held 10 s: hotspot name and password on the LCD
 
 uint32_t eventSeq = 0;  // event sequence number for this boot
 uint32_t committedPulses = 0;
@@ -265,6 +272,7 @@ bool saveSettings() {
   if (!f) return false;
   f.printf("wifi_ssid=%s\n", settings.wifiSsid.c_str());
   f.printf("wifi_pass=%s\n", settings.wifiPass.c_str());
+  f.printf("hotspot_pass=%s\n", settings.hotspotPass.c_str());
   f.printf("device_name=%s\n", settings.deviceName.c_str());
   f.printf("api_base=%s\n", settings.apiBase.c_str());
   f.printf("cloud_token=%s\n", settings.cloudToken.c_str());
@@ -295,6 +303,7 @@ void loadSettings() {
     String v = line.substring(eq + 1);
     if (k == "wifi_ssid") settings.wifiSsid = v;
     else if (k == "wifi_pass") settings.wifiPass = v;
+    else if (k == "hotspot_pass") settings.hotspotPass = v;
     else if (k == "device_name" && v.length()) settings.deviceName = v;
     else if (k == "api_base" && v.startsWith("https://")) settings.apiBase = v;
     else if (k == "cloud_token") settings.cloudToken = v;
@@ -580,30 +589,43 @@ void updateLcd() {
   if (now - last < LCD_REFRESH_MS) return;
   last = now;
 
-  if (setupMode) {
-    lcdRow(0, "WIFI SETUP MODE");
-    lcdRow(1, "AP:" + WiFi.softAPSSID());
-    lcdRow(2, "Pass:" + apPassword);
+  // First setup (no shop Wi-Fi yet), or FLASH held 10 s: how to reach the settings page.
+  if (settings.wifiSsid.isEmpty() || now < hotspotInfoUntilMs) {
+    lcdRow(0, settings.wifiSsid.isEmpty() ? "WIFI SETUP" : "HOTSPOT SETTINGS");
+    lcdRow(1, "AP:" + hotspotSsid());
+    lcdRow(2, "Pass:" + settings.hotspotPass);
     lcdRow(3, "Open 192.168.4.1");
     return;
   }
-  lcdRow(0, selectionActive() ? "VeNdO  Insert: Tab " + String(selStation)
-                              : soleTablet() ? String("VeNdO  INSERT COIN") : String("VeNdO  Ask staff"));
+  lcdRow(0, MAX_STATIONS > 1 && selectionActive() ? "VeNdO  Insert: Tab " + String(selStation)
+            : soleTablet()                         ? String("VeNdO  INSERT COIN")
+                                                   : String("VeNdO  Ask staff"));
   if (pairingOpen) {
     lcdRow(1, String("PAIR CODE: ") + pairingCode);
     lcdRow(2, WiFi.localIP().toString());
     lcdRow(3, "Enter on the tablet");
     return;
   }
+#if MAX_STATIONS == 1
+  const uint32_t r = remainingSeconds(1);
+  char t[21];
+  if (stations[1].pairKeyHex.isEmpty()) snprintf(t, sizeof(t), "Tablet not paired");
+  else if (!r) snprintf(t, sizeof(t), "Time left: --:--");
+  else snprintf(t, sizeof(t), "Time left: %lu:%02lu:%02lu", (unsigned long)(r / 3600), (unsigned long)((r % 3600) / 60), (unsigned long)(r % 60));
+  lcdRow(1, t);
+  lcdRow(2, String());
+#else
   lcdRow(1, tabletCell(1) + tabletCell(2));
   lcdRow(2, MAX_STATIONS >= 4 ? tabletCell(3) + tabletCell(4) : String());
+#endif
   if (now < infoUntilMs) {
     lcdRow(3, WiFi.isConnected() ? WiFi.localIP().toString() + (pollState == CLOUD_OK ? " online" : "") : String("WiFi: not connected"));
   } else if (heldPulses) {
     lcdRow(3, String("Held: ") + LCD_PESO + String(heldPulses) + " ask staff");
   } else if (lastCoinPulses) {
     // One accepted pulse is one peso (1, 5, 10 and 20 peso coins).
-    lcdRow(3, String("Last: ") + LCD_PESO + String(lastCoinPulses) + (lastCoinStation ? " Tab " + String(lastCoinStation) : String(" held")));
+    lcdRow(3, String("Last: ") + LCD_PESO + String(lastCoinPulses) +
+                  (!lastCoinStation ? String(" held") : MAX_STATIONS == 1 ? String() : " Tab " + String(lastCoinStation)));
   } else {
     lcdRow(3, "Thank you!");
   }
@@ -716,6 +738,8 @@ void noteTlsResult(int code) {
 }
 
 int httpsPost(const String &url, const String &body, const String &bearer, String &response) {
+  // A dead connection (e.g. after a Wi-Fi change) still holds its TLS buffers: release them first.
+  if (!netClient.connected()) netClient.stop();
   if (ESP.getMaxFreeBlockSize() < TLS_MIN_FREE_BLOCK && !netClient.connected()) {
     Serial.printf("[net] low memory (largest block %u B), cloud call skipped\n", ESP.getMaxFreeBlockSize());
     response = String();
@@ -745,7 +769,7 @@ bool pulsesPending() {
 }
 
 bool cloudReady() {
-  return !setupMode && WiFi.isConnected() && timeValid() && settings.cloudToken.length() && cloudState != CLOUD_UNAUTHORIZED;
+  return WiFi.isConnected() && timeValid() && settings.cloudToken.length() && cloudState != CLOUD_UNAUTHORIZED;
 }
 
 // ============================================================ cloud enrollment + event sync
@@ -790,7 +814,7 @@ const char *eventTypeName(uint8_t t) {
 String buildSyncBody(uint8_t &countOut) {
   countOut = min<uint8_t>(evCount, EVENTS_PER_SYNC);
   String b;
-  b.reserve(760 + countOut * 230);  // what this batch needs, not the maximum
+  b.reserve(840 + countOut * 230);  // what this batch needs, not the maximum
   b += "{\"protocol\":" + String(PROTOCOL_VERSION);
   b += ",\"boot_id\":\"" + bootId + "\"";
   b += ",\"uptime_ms\":" + u64str(millis64());
@@ -804,6 +828,8 @@ String buildSyncBody(uint8_t &countOut) {
   b += ",\"seconds_per_pulse\":" + String(settings.secondsPerPulse);
   b += ",\"rate_version\":" + String(settings.rateVersion);
   b += ",\"wifi_rssi\":" + String(WiFi.RSSI());
+  b += ",\"wifi_ssid\":\"" + sanitize(WiFi.SSID(), 32) + "\"";
+  b += ",\"local_ip\":\"" + WiFi.localIP().toString() + "\"";
   b += ",\"free_heap\":" + String(ESP.getFreeHeap());
   b += ",\"buffered_events\":" + String(evCount);
   b += ",\"dropped_events\":" + String(droppedEvents);
@@ -887,7 +913,7 @@ void cloudSync() {
 }
 
 void cloudLoop() {
-  if (setupMode || !WiFi.isConnected()) return;
+  if (!WiFi.isConnected()) return;
   if (settings.cloudToken.isEmpty() && settings.enrollCode.isEmpty()) {
     cloudState = CLOUD_DISABLED;
     return;
@@ -1042,7 +1068,7 @@ bool statusUpload() {
 }
 
 void statusLoop() {
-  if (setupMode || settings.statusToken.isEmpty()) {
+  if (settings.statusToken.isEmpty()) {
     statusState = CLOUD_DISABLED;
     return;
   }
@@ -1247,7 +1273,10 @@ void handleUnpair() {
   applyChargeRelay();
 }
 
-// ============================================================ setup portal (Wi-Fi + cloud enrollment)
+// ============================================================ admin hotspot settings page
+// Served only to devices joined to the coin box's own hotspot (192.168.4.1),
+// never over the shop Wi-Fi where customers' phones may be. Three tabs:
+// Wi-Fi (join the shop network), Pair tablet (pairing code) and Settings.
 String htmlEscape(const String &s) {
   String o;
   for (size_t i = 0; i < s.length(); i++) {
@@ -1261,56 +1290,275 @@ String htmlEscape(const String &s) {
   return o;
 }
 
-void handleSetupPage() {
-  String p;
-  p.reserve(2600);
-  p += F("<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'><title>Vendo coin controller setup</title>"
-         "<style>body{font-family:sans-serif;max-width:480px;margin:auto;padding:16px}label{display:block;margin:12px 0}"
-         "input{width:100%;padding:10px;font-size:16px;box-sizing:border-box}button{padding:12px 20px;font-size:16px}</style>"
-         "<h1>Coin controller setup</h1>");
-  p += "<p>Device ID: <b>" + deviceId + "</b> · firmware " FW_VERSION "</p>";
-  p += F("<form method=post action=/save>"
-         "<label>Wi-Fi network name (SSID)<input name=ssid required maxlength=32 value=\"");
+String hotspotSsid() { return "VendoCoin-" + deviceId.substring(3); }
+
+void startHotspot() {
+  WiFi.softAP(hotspotSsid().c_str(), settings.hotspotPass.c_str(), 1, 0, HOTSPOT_MAX_CLIENTS);
+  Serial.printf("[wifi] hotspot %s at http://%s (password: hold FLASH 10 s or serial \"hotspot\")\n",
+                hotspotSsid().c_str(), WiFi.softAPIP().toString().c_str());
+}
+
+// (Re)connect to the shop Wi-Fi with the saved credentials.
+void connectShopWifi() {
+  staPaused = false;
+  staDownSinceMs = millis64();
+  netClient.stop();  // the old network's connection is dead: free its TLS buffers now
+  if (settings.wifiSsid.isEmpty()) return;
+  WiFi.disconnect();
+  WiFi.begin(settings.wifiSsid.c_str(), settings.wifiPass.c_str());
+}
+
+// Only devices on the hotspot may open the settings page; it answers "not found" on the shop Wi-Fi.
+bool adminRequest() {
+  if (server.client().localIP() == WiFi.softAPIP()) return true;
+  sendError(404, "not_found");
+  return false;
+}
+
+// Every form carries the per-boot token, so a web page open on the admin's phone cannot post here.
+bool adminPost() {
+  if (!adminRequest()) return false;
+  if (!constantTimeEquals(server.arg("t"), adminFormToken)) {
+    server.send(403, "text/plain", "Expired form. Reload the page and try again.");
+    return false;
+  }
+  return true;
+}
+
+void redirectTo(const String &where) {
+  server.sendHeader("Location", where);
+  server.send(303, "text/plain", "");
+}
+
+// The page is sent in chunks so a large String never competes with the TLS buffers for heap.
+void chunk(String &p, bool last = false) {
+  if (p.length() >= 900 || last) {
+    server.sendContent(p);
+    p = "";
+  }
+}
+
+void formStart(String &p, const char *action) {
+  p += F("<form method=post action=");
+  p += action;
+  p += F("><input type=hidden name=t value=");
+  p += adminFormToken;
+  p += '>';
+}
+
+const char *wifiStatusText() {
+  if (settings.wifiSsid.isEmpty()) return "not set up";
+  if (WiFi.isConnected()) return pollState == CLOUD_OK ? "connected, dashboard online" : "connected, dashboard not reachable yet";
+  if (staPaused) return "cannot connect (retries paused while you are on the hotspot)";
+  switch (WiFi.status()) {
+    case WL_NO_SSID_AVAIL: return "network not found";
+    case WL_WRONG_PASSWORD: return "wrong password";
+    case WL_CONNECT_FAILED: return "connection failed";
+    default: return "connecting...";
+  }
+}
+
+void wifiTab(String &p) {
+  p += F("<h2>Shop Wi-Fi</h2><p>Network: <b>");
+  p += settings.wifiSsid.length() ? htmlEscape(settings.wifiSsid) : String("(none)");
+  p += F("</b><br>Status: <b>");
+  p += wifiStatusText();
+  p += F("</b>");
+  if (WiFi.isConnected()) {
+    p += F("<br>Coin box IP: <b>");
+    p += WiFi.localIP().toString();
+    p += F("</b> · signal ");
+    p += String(WiFi.RSSI());
+    p += F(" dBm");
+  }
+  p += F("</p>");
+  chunk(p);
+  formStart(p, "/wifi");
+  p += F("<label>Network name (SSID)<input name=ssid list=nets required maxlength=32 autocomplete=off value=\"");
   p += htmlEscape(settings.wifiSsid);
-  p += F("\"></label><label>Wi-Fi password<input name=pass type=password maxlength=64 placeholder='(unchanged if empty)'></label>"
-         "<label>Controller name<input name=name maxlength=60 value=\"");
+  p += F("\"></label><datalist id=nets>");
+  const int found = WiFi.scanComplete();
+  for (int i = 0; i < found && i < 20; i++) {
+    p += F("<option value=\"");
+    p += htmlEscape(WiFi.SSID(i));
+    p += F("\">");
+    chunk(p);
+  }
+  // The scan list holds heap the dashboard connection needs: free it once it is in the page.
+  if (found > 0) WiFi.scanDelete();
+  p += F("</datalist><label>Password<input name=pass type=password maxlength=64 autocomplete=off "
+         "placeholder='(unchanged if empty and the network is the same)'></label>"
+         "<button>Save and connect</button></form>");
+  formStart(p, "/scan");
+  p += F("<button class=alt>");
+  p += found > 0 ? F("Scan again") : F("Scan for networks");
+  p += F("</button></form>");
+  if (found > 0) {
+    p += F("<p><small>Found ");
+    p += String(found);
+    p += F(" network(s): tap the name field to pick one.</small></p>");
+  } else if (found == WIFI_SCAN_RUNNING) {
+    p += F("<p><small>Scanning... reload in a few seconds.</small></p>");
+  }
+  p += F("<p><small>Paid time keeps running while the Wi-Fi changes. The hotspot can drop for a few seconds "
+         "while the coin box connects; rejoin it if your phone does not.</small></p>");
+}
+
+void pairTab(String &p) {
+  p += F("<h2>Pair a tablet</h2>");
+  if (pairingOpen) {
+    const uint64_t now = millis64();
+    const uint32_t left = now < pairingUntilMs ? (uint32_t)((pairingUntilMs - now) / 1000) : 0;
+    p += F("<p class=code>");
+    p += pairingCode;
+    p += F("</p><p>Valid for <b>");
+    p += String(left);
+    p += F(" s</b>. On the tablet: Admin → Coin box, enter coin box IP <b>");
+    p += WiFi.isConnected() ? WiFi.localIP().toString() : String("(not on Wi-Fi)");
+    p += F("</b>, its tablet number and this code.</p>");
+  } else {
+    p += F("<p>Generate a 6-digit code, then enter it on the tablet within 2 minutes "
+           "(Admin → Coin box). The code also shows on the coin box LCD.</p>");
+  }
+  if (!WiFi.isConnected()) {
+    p += F("<p class=warn>The coin box is not on the shop Wi-Fi. Tablets pair over the shop Wi-Fi: "
+           "set it up in the Wi-Fi tab first.</p>");
+  }
+  formStart(p, "/pair-code");
+  p += pairingOpen ? F("<button>New code</button></form>") : F("<button>Generate pairing code</button></form>");
+  chunk(p);
+  p += F("<table><tr><th>Tablet</th><th>Paired</th><th>Device</th></tr>");
+  for (uint8_t i = 1; i <= MAX_STATIONS; i++) {
+    p += F("<tr><td>");
+    p += String(i);
+    p += F("</td><td>");
+    p += stations[i].pairKeyHex.length() ? F("yes") : F("no");
+    p += F("</td><td>");
+    p += htmlEscape(stations[i].pairedPhoneId);
+    p += F("</td></tr>");
+  }
+  p += F("</table><p><small>Pairing a tablet number again replaces the tablet that had it.</small></p>");
+}
+
+void settingsTab(String &p) {
+  p += F("<h2>Coin box</h2>");
+  formStart(p, "/settings");
+  p += F("<label>Coin box name<input name=name maxlength=60 value=\"");
   p += htmlEscape(settings.deviceName);
-  p += F("\"></label><label>Cloud enrollment code (from the dashboard; needed to choose tablets from the dashboard)<input name=enroll maxlength=16 placeholder='XXXXX-XXXXX'></label>"
-         "<label>API base URL<input name=api maxlength=120 value=\"");
+  p += F("\"></label><label>Dashboard enrollment code (from the dashboard; needed to choose tablets there)"
+         "<input name=enroll maxlength=16 autocomplete=off placeholder='XXXXX-XXXXX'></label><p>Dashboard: <b>");
+  p += settings.cloudToken.length() ? (settings.enrollCode.length() ? "re-enrolling" : "enrolled")
+                                    : (settings.enrollCode.length() ? "enrolling..." : "not enrolled");
+  p += F("</b></p><label>API base URL<input name=api maxlength=120 value=\"");
   p += htmlEscape(settings.apiBase);
-  p += F("\"></label><p>Cloud: ");
-  p += settings.cloudToken.length() ? "enrolled" : "not enrolled";
-  p += F("</p><h2>Upload to existing status.php (tablet 1)</h2><label>Status URL<input name=status_url maxlength=120 value=\"");
+  p += F("\"></label>");
+  chunk(p);
+  p += F("<h3>Upload to status.php (tablet 1)</h3><label>Status URL<input name=status_url maxlength=120 value=\"");
   p += htmlEscape(settings.statusUrl);
   p += F("\"></label><label>Status device ID<input name=status_device maxlength=64 value=\"");
   p += htmlEscape(settings.statusDeviceId);
-  p += F("\"></label><label>Status upload token (64 characters)<input name=status_token type=password maxlength=128 "
-         "autocomplete=off placeholder='");
+  p += F("\"></label><label>Status upload token<input name=status_token type=password maxlength=128 autocomplete=off placeholder='");
   p += settings.statusToken.length() ? F("(saved; leave empty to keep)") : F("(not set: upload disabled)");
-  p += F("'></label><label><input type=checkbox name=status_clear value=1 style='width:auto'> Remove the saved upload token</label>"
-         "<button>Save and restart</button></form>"
-         "<p><small>Saving does not change paid time. Tablet pairing is separate: hold the FLASH button 3 s in normal mode.</small></p>");
-  server.send(200, "text/html", p);
+  p += F("'></label><label class=check><input type=checkbox name=status_clear value=1> Remove the saved upload token</label>"
+         "<button>Save</button></form>");
+  chunk(p);
+  p += F("<h2>Hotspot password</h2><p>Hotspot: <b>");
+  p += hotspotSsid();
+  p += F("</b>. Holding the FLASH button 10 s shows the password on the LCD.</p>");
+  formStart(p, "/hotspot");
+  p += F("<label>New password (8-15 characters)<input name=pass type=password required minlength=8 maxlength=15 "
+         "autocomplete=new-password></label><button>Change password</button></form>");
 }
 
-void handleSetupSave() {
-  const String ssid = server.arg("ssid");
-  if (ssid.isEmpty() || ssid.length() > 32 || ssid.indexOf('\n') >= 0) {
-    server.send(400, "text/plain", "Invalid SSID");
-    return;
+void handleAdminPage() {
+  if (!adminRequest()) return;
+  String tab = server.arg("tab");
+  if (tab != "pair" && tab != "settings") tab = "wifi";
+  const String msg = sanitize(server.arg("msg"), 120);
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "text/html", "");
+  String p;
+  p.reserve(1200);
+  p += F("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+         "<title>Coin box settings</title>");
+  // While a pairing code is open the page refreshes, so the countdown and the paired list stay current.
+  if (tab == "pair" && pairingOpen) p += F("<meta http-equiv=refresh content='5;url=/?tab=pair'>");
+  p += F("<style>body{font-family:sans-serif;max-width:480px;margin:auto;padding:16px;color:#222}"
+         "nav{display:flex;gap:4px;border-bottom:2px solid #0a7;margin:12px 0}"
+         "nav a{flex:1;text-align:center;padding:10px 4px;text-decoration:none;color:#333;background:#eee;border-radius:8px 8px 0 0}"
+         "nav a.on{background:#0a7;color:#fff;font-weight:bold}label{display:block;margin:12px 0}"
+         "input{width:100%;padding:10px;font-size:16px;box-sizing:border-box}.check input{width:auto}"
+         "button{padding:12px 20px;font-size:16px;margin:6px 0;background:#0a7;color:#fff;border:0;border-radius:8px}"
+         "button.alt{background:#666}.code{font-size:48px;letter-spacing:8px;font-weight:bold;text-align:center;margin:8px}"
+         ".msg{background:#e6f7f0;padding:10px;border-radius:8px}.warn{background:#fff3e0;padding:10px;border-radius:8px}"
+         "table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid #ddd;padding:6px;text-align:left}</style>");
+  p += F("<h1>Coin box settings</h1><p><small>");
+  p += htmlEscape(settings.deviceName);
+  p += F(" · ");
+  p += deviceId;
+  p += F(" · firmware " FW_VERSION "</small></p><nav>");
+  p += tab == "wifi" ? F("<a class=on href=/>Wi-Fi</a>") : F("<a href=/>Wi-Fi</a>");
+  p += tab == "pair" ? F("<a class=on href='/?tab=pair'>Pair tablet</a>") : F("<a href='/?tab=pair'>Pair tablet</a>");
+  p += tab == "settings" ? F("<a class=on href='/?tab=settings'>Settings</a>") : F("<a href='/?tab=settings'>Settings</a>");
+  p += F("</nav>");
+  if (msg.length()) {
+    p += F("<p class=msg>");
+    p += htmlEscape(msg);
+    p += F("</p>");
   }
-  settings.wifiSsid = ssid;
+  chunk(p);
+  if (tab == "pair") pairTab(p);
+  else if (tab == "settings") settingsTab(p);
+  else wifiTab(p);
+  chunk(p, true);
+  server.sendContent("");  // end of the chunked reply
+}
+
+void handleWifiSave() {
+  if (!adminPost()) return;
+  const String ssid = server.arg("ssid");
   const String pass = server.arg("pass");
-  if (pass.length() && pass.indexOf('\n') < 0 && pass.length() <= 64) settings.wifiPass = pass;
+  if (ssid.isEmpty() || ssid.length() > 32 || ssid.indexOf('\n') >= 0) return redirectTo("/?msg=Invalid+network+name.");
+  if (pass.indexOf('\n') >= 0 || pass.length() > 64 || (pass.length() && pass.length() < 8)) {
+    return redirectTo("/?msg=Wi-Fi+passwords+are+8+to+64+characters.");
+  }
+  // An empty password keeps the saved one for the same network, and means an open network for a new one.
+  if (pass.length() || ssid != settings.wifiSsid) settings.wifiPass = pass;
+  settings.wifiSsid = ssid;
+  saveSettings();
+  redirectTo("/?msg=Saved.+Connecting...+reload+this+page+in+about+15+seconds.");
+  Serial.printf("[wifi] connecting to %s (set from the hotspot)\n", ssid.c_str());
+  connectShopWifi();
+}
+
+void handleScan() {
+  if (!adminPost()) return;
+  if (WiFi.scanComplete() != WIFI_SCAN_RUNNING) {
+    WiFi.scanDelete();
+    WiFi.scanNetworks(true);  // async: results appear on the next page load
+  }
+  redirectTo("/?msg=Scanning+for+networks...+the+list+is+ready+in+a+few+seconds.");
+}
+
+void handlePairCode() {
+  if (!adminPost()) return;
+  openPairingWindow();
+  redirectTo("/?tab=pair");
+}
+
+void handleSettingsSave() {
+  if (!adminPost()) return;
   const String name = sanitize(server.arg("name"), 60);
   if (name.length()) settings.deviceName = name;
+  const String api = sanitize(server.arg("api"), 120);
+  if (api.startsWith("https://")) settings.apiBase = api;  // HTTPS only
   const String enroll = sanitize(server.arg("enroll"), 16);
   if (enroll.length()) {
     settings.enrollCode = enroll;
     settings.cloudToken = "";  // re-enrollment replaces the old credential
+    cloudState = CLOUD_DISABLED;
+    nextSyncMs = 0;
   }
-  const String api = sanitize(server.arg("api"), 120);
-  if (api.startsWith("https://")) settings.apiBase = api;  // HTTPS only
   const String statusUrl = sanitize(server.arg("status_url"), 120);
   if (statusUrl.startsWith("https://")) settings.statusUrl = statusUrl;  // HTTPS only
   const String statusDevice = sanitize(server.arg("status_device"), 64);
@@ -1319,17 +1567,61 @@ void handleSetupSave() {
   if (statusToken.length() >= 16) settings.statusToken = statusToken;
   if (server.arg("status_clear") == "1") settings.statusToken = "";
   saveSettings();
-  LittleFS.remove(FORCE_SETUP_FILE);
-  server.send(200, "text/html", "<p>Saved. Restarting&hellip; Reconnect your phone to your normal Wi-Fi.</p>");
-  delay(500);
-  ESP.restart();
+  statusState = CLOUD_DISABLED;  // clear "unauthorized" and upload right away
+  statusLastFailed = false;
+  statusUploadNeeded = true;
+  lastStatusUploadMs = 0;
+  redirectTo("/?tab=settings&msg=Saved.");
+}
+
+void handleHotspotPassword() {
+  if (!adminPost()) return;
+  const String pass = server.arg("pass");
+  if (pass.length() < HOTSPOT_PASS_MIN || pass.length() > HOTSPOT_PASS_MAX || sanitize(pass, HOTSPOT_PASS_MAX) != pass) {
+    return redirectTo("/?tab=settings&msg=The+hotspot+password+must+be+8+to+15+plain+characters.");
+  }
+  settings.hotspotPass = pass;
+  saveSettings();
+  server.send(200, "text/html",
+              "<meta name=viewport content='width=device-width,initial-scale=1'><p style='font-family:sans-serif'>"
+              "Hotspot password changed. Rejoin the hotspot with the new password in a few seconds.</p>");
+  hotspotRestartAtMs = millis64() + 1500;  // after this reply has left
+  Serial.println("[wifi] hotspot password changed");
+}
+
+// Hotspot and shop Wi-Fi housekeeping, once a second.
+void wifiLoop() {
+  static uint64_t last = 0;
+  const uint64_t now = millis64();
+  if (hotspotRestartAtMs && now >= hotspotRestartAtMs) {
+    hotspotRestartAtMs = 0;
+    startHotspot();
+  }
+  if (now - last < 1000) return;
+  last = now;
+  if (settings.wifiSsid.isEmpty() || WiFi.isConnected()) {
+    staDownSinceMs = now;
+    return;
+  }
+  const bool adminOnHotspot = WiFi.softAPgetStationNum() > 0;
+  if (staPaused) {
+    if (!adminOnHotspot) {
+      Serial.println("[wifi] hotspot empty: retrying the shop Wi-Fi");
+      connectShopWifi();
+    }
+  } else if (adminOnHotspot && now - staDownSinceMs >= STA_PAUSE_AFTER_MS) {
+    Serial.printf("[wifi] %s unreachable; retries paused while someone uses the hotspot\n", settings.wifiSsid.c_str());
+    WiFi.disconnect();
+    staPaused = true;
+  }
 }
 
 // ============================================================ FLASH button
-// short press  → next coins go to the next tablet (offline fallback; inside the locked box)
+// short press  → shared box: next coins go to the next tablet (offline fallback;
+//                inside the locked box). One-tablet box: show IP / device id.
 // hold 1-3 s   → show IP / device id on the LCD for 10 s
 // hold 3 s     → open the tablet pairing window
-// hold 10 s    → restart into Wi-Fi setup
+// hold 10 s    → show the hotspot name and password on the LCD for 60 s
 void cycleSelection() {
   const uint8_t next = selectionActive() ? selStation + 1 : 1;
   setSelection(next > MAX_STATIONS ? 0 : next, SELECTION_TTL_S);
@@ -1339,56 +1631,56 @@ void buttonLoop() {
   static uint64_t downSince = 0;
   static bool wasDown = false;
   static bool actedPair = false;
+  static bool actedHotspot = false;
   const bool down = digitalRead(BUTTON_PIN) == LOW;
   const uint64_t now = millis64();
   if (down && !wasDown) {
     downSince = now;
     actedPair = false;
+    actedHotspot = false;
   }
-  if (down && !setupMode) {
+  if (down) {
     const uint64_t held = now - downSince;
-    if (held >= BUTTON_SETUP_HOLD_MS) {
-      File f = LittleFS.open(FORCE_SETUP_FILE, "w");
-      if (f) f.close();
-      saveCheckpoint();
-      lcdRow(2, "Restarting into");
-      lcdRow(3, "Wi-Fi setup...");
-      delay(300);
-      ESP.restart();
+    if (held >= BUTTON_SETUP_HOLD_MS && !actedHotspot) {
+      actedHotspot = true;
+      pairingOpen = false;  // the LCD shows the hotspot instead of the code
+      hotspotInfoUntilMs = now + HOTSPOT_INFO_SHOW_MS;
     } else if (held >= BUTTON_PAIR_HOLD_MS && !actedPair) {
       actedPair = true;
       openPairingWindow();
     }
   }
-  if (!down && wasDown && !setupMode) {
+  if (!down && wasDown) {
     const uint64_t held = now - downSince;
-    if (held >= 50 && held < BUTTON_INFO_MAX_MS) cycleSelection();
-    else if (held >= BUTTON_INFO_HOLD_MS && held < BUTTON_PAIR_HOLD_MS) infoUntilMs = now + 10000;
+    if (held >= 50 && held < BUTTON_INFO_MAX_MS && MAX_STATIONS > 1) cycleSelection();
+    else if (held >= 50 && held < BUTTON_PAIR_HOLD_MS) infoUntilMs = now + 10000;
   }
   wasDown = down;
   if (pairingOpen && now >= pairingUntilMs) pairingOpen = false;
 }
 
 // ============================================================ setup / loop
+// The admin hotspot is always on, next to the shop Wi-Fi (AP + station).
 void startWifi() {
   WiFi.persistent(false);  // we store credentials ourselves; avoid SDK flash writes
-  const bool forceSetup = LittleFS.exists(FORCE_SETUP_FILE);
-  if (settings.wifiSsid.isEmpty() || forceSetup) {
-    setupMode = true;
-    apPassword = String(10000000UL + (ESP.random() % 90000000UL));  // 8 digits, shown on LCD
-    WiFi.mode(WIFI_AP);
-    WiFi.softAP(("VendoCoin-" + deviceId.substring(3)).c_str(), apPassword.c_str());
-    server.on("/", HTTP_GET, handleSetupPage);
-    server.on("/save", HTTP_POST, handleSetupSave);
-    Serial.printf("[wifi] setup portal: SSID %s password %s at http://192.168.4.1\n", WiFi.softAPSSID().c_str(), apPassword.c_str());
-  } else {
-    WiFi.mode(WIFI_STA);
-    WiFi.setSleepMode(WIFI_NONE_SLEEP);  // keep the local API responsive
-    WiFi.hostname(("vendo-coin-" + deviceId.substring(3)).c_str());
-    WiFi.setAutoReconnect(true);
-    WiFi.begin(settings.wifiSsid.c_str(), settings.wifiPass.c_str());
-    configTime(0, 0, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
+  if (settings.hotspotPass.length() < HOTSPOT_PASS_MIN) {
+    settings.hotspotPass = String(10000000UL + (ESP.random() % 90000000UL));  // 8 digits until the admin sets one
+    saveSettings();
   }
+  adminFormToken = randomHex(8);
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.setSleepMode(WIFI_NONE_SLEEP);  // keep the local API responsive
+  WiFi.hostname(("vendo-coin-" + deviceId.substring(3)).c_str());
+  WiFi.setAutoReconnect(true);
+  startHotspot();
+  connectShopWifi();
+  configTime(0, 0, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
+  server.on("/", HTTP_GET, handleAdminPage);
+  server.on("/wifi", HTTP_POST, handleWifiSave);
+  server.on("/scan", HTTP_POST, handleScan);
+  server.on("/pair-code", HTTP_POST, handlePairCode);
+  server.on("/settings", HTTP_POST, handleSettingsSave);
+  server.on("/hotspot", HTTP_POST, handleHotspotPassword);
   server.on("/api/v1/info", HTTP_GET, handleInfo);
   server.on("/api/v1/status", HTTP_GET, handleStatus);
   server.on("/api/v1/pair", HTTP_POST, handlePair);
@@ -1410,6 +1702,8 @@ void setup() {
   bootId = randomHex(4);
 
   pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(STATUS_LED_PIN, OUTPUT);
+  digitalWrite(STATUS_LED_PIN, LOW);  // on until the shop Wi-Fi is up
   digitalWrite(CHARGE_RELAY_PIN, CHARGE_RELAY_ACTIVE_LOW ? HIGH : LOW);  // off until settings are loaded
   pinMode(CHARGE_RELAY_PIN, OUTPUT);
 
@@ -1449,7 +1743,7 @@ void setup() {
 void logWifiChanges() {
   static bool was = false;
   const bool now = WiFi.isConnected();
-  if (now == was || setupMode) return;
+  if (now == was) return;
   was = now;
   if (now) {
     Serial.printf("[wifi] connected to %s, IP %s (use this IP to pair the tablets)\n", WiFi.SSID().c_str(),
@@ -1460,19 +1754,21 @@ void logWifiChanges() {
 }
 
 // Opens the 2-minute tablet pairing window with a fresh 6-digit code.
-// Triggered by holding FLASH 3 s or by the USB serial command "pair".
+// Triggered from the hotspot's Pair tablet tab, by holding FLASH 3 s or by the USB serial command "pair".
 void openPairingWindow() {
   snprintf(pairingCode, sizeof(pairingCode), "%06lu", (unsigned long)(ESP.random() % 1000000UL));
   pairingOpen = true;
   pairingAttempts = 0;
   pairingUntilMs = millis64() + PAIRING_WINDOW_MS;
+  hotspotInfoUntilMs = 0;  // the LCD shows the code
   // Also on serial (USB = physical access, like the button) in case the LCD is unreadable.
   Serial.printf("[pair] pairing window open for 120 s: code %s, IP %s\n", pairingCode, WiFi.localIP().toString().c_str());
 }
 
 // USB serial commands (physical access, like the FLASH button or reflashing):
 //   pair                      → open the tablet pairing window and print the code
-//   status                    → print every tablet's time, selection and held coins
+//   status                    → print the Wi-Fi, every tablet's time, selection and held coins
+//   hotspot                   → print the admin hotspot name and password
 //   select=N                  → next coins go to tablet N (0 = hold)
 //   enroll=XXXXX-XXXXX        → enroll with a one-time coin box code from the dashboard
 //   relay=on | off | auto     → test the D6 charger relay (not saved; auto = tablets decide)
@@ -1494,7 +1790,13 @@ void serialConfigLoop() {
     bool changed = false;
     if (key == "pair") {
       openPairingWindow();
+    } else if (key == "hotspot") {
+      Serial.printf("[wifi] hotspot %s password %s at http://%s\n", hotspotSsid().c_str(), settings.hotspotPass.c_str(),
+                    WiFi.softAPIP().toString().c_str());
     } else if (key == "status") {
+      Serial.printf("[status] wifi %s: %s, signal %d dBm, %u on the hotspot\n",
+                    settings.wifiSsid.length() ? settings.wifiSsid.c_str() : "(none)", wifiStatusText(),
+                    WiFi.isConnected() ? (int)WiFi.RSSI() : 0, WiFi.softAPgetStationNum());
       Serial.printf("[status] heap free %u B, largest block %u B, buffered events %u\n", ESP.getFreeHeap(),
                     ESP.getMaxFreeBlockSize(), evCount);
       Serial.printf("[status] IP %s, poll %s, sync %s, upload %s, next coins -> %s (%lu s), held %lu peso(s)\n",
@@ -1548,10 +1850,12 @@ void serialConfigLoop() {
 void loop() {
   millis64();  // keep the 64-bit clock's wrap tracking current
   logWifiChanges();
+  wifiLoop();
   serialConfigLoop();
   processPulses();
   checkExpiry();
   buttonLoop();
+  digitalWrite(STATUS_LED_PIN, WiFi.isConnected() ? HIGH : LOW);
   server.handleClient();
   updateLcd();
   pollLoop();    // attendant selection + dashboard commands (~2 s, kept-alive TLS)
