@@ -95,6 +95,15 @@ it('does not overwrite a newer status with a stale one', function () {
     expect($ctl->fresh()->status('remaining_s'))->toBe(50);
 });
 
+it('stores the coin box Wi-Fi name and local IP, dropping an invalid IP', function () {
+    [$ctl, $t] = enrollDevice(site(), 'controller');
+    deviceCall($t, 'controller/sync', syncBody(status: ['wifi_ssid' => 'Shop-WiFi', 'local_ip' => '192.168.0.105']))->assertOk();
+    expect($ctl->fresh()->status('wifi_ssid'))->toBe('Shop-WiFi')
+        ->and($ctl->fresh()->status('local_ip'))->toBe('192.168.0.105');
+    deviceCall($t, 'controller/sync', ['uptime_ms' => 999999] + syncBody(status: ['local_ip' => '<script>']))->assertOk();
+    expect($ctl->fresh()->status('local_ip'))->toBeNull();
+});
+
 it('rejects invalid events individually and malformed bodies with 422', function () {
     [, $t] = enrollDevice(site(), 'controller');
     $bad = coinEvent(2, pulses: 0);           // credit without pulses
@@ -189,4 +198,19 @@ it('returns the device type mismatch as unauthorized, not as data', function () 
 it('accepts the X-Device-Token header when Authorization is stripped', function () {
     [, $t] = enrollDevice(site(), 'controller');
     $this->withHeader('X-Device-Token', $t)->postJson('/api/v1/controller/poll', ['boot_id' => 'a1b2c3d4'])->assertOk();
+});
+
+it('stores a kiosk coin box\'s station 1 under its tablet number', function () {
+    $site = site();
+    [$box, $token] = enrollDevice($site, 'controller', 3);
+    $res = deviceCall($token, 'controller/sync', syncBody(
+        [coinEvent(1, 1), coinEvent(2, 0, 5, 0, 'held'), coinEvent(3, 2)],
+        ['held_pulses' => 5, 'stations' => [['station' => 1, 'session' => 'running', 'remaining_s' => 1200, 'session_no' => 1, 'paired' => true]]],
+    ))->assertOk();
+    expect($res->json('ack.acked_seqs'))->toBe([1, 2])->and($res->json('ack.rejected_seqs'))->toBe([3]) // no station 2 on a kiosk box
+        ->and(CoinEvent::orderBy('seq')->pluck('station_no')->all())->toBe([3, 0])
+        ->and(KioskSession::sole()->station_no)->toBe(3)
+        ->and($box->fresh()->status('stations'))->toHaveKey(3)
+        ->and($box->fresh()->held_pulses)->toBe(5)
+        ->and($site->fresh()->held_pulses)->toBe(0);
 });

@@ -127,7 +127,7 @@ With SSH instead: `php artisan migrate --force` in `vendo_dashboard/`, then use
    without a token → `401`.
 4. `/api/status.php` still answers as before.
 5. Add a site → **Enroll a device → Coin box** → enter the code in the coin box
-   setup portal (hold FLASH 10 s) → within ~15 s the coin box shows **ONLINE**.
+   hotspot page (Settings tab, `http://192.168.4.1`) → within ~15 s the coin box shows **ONLINE**.
 6. For each tablet: **Enroll a device → Tablet N** → tablet Admin → Cloud → enter
    the code; then pair it with the coin box as Tablet N (Admin → Coin box).
 7. Click **Select for next coins** on a tablet card → the coin box LCD shows
@@ -155,7 +155,8 @@ migration ran (migrations are forward-only).
 | Admin password | Dashboard → your username → Change password (signs out other browsers) |
 | Device token (tablet / coin box) | Site page → Devices → **Revoke** → new code → re-enroll |
 | Setup token | Remove after setup |
-| Tablet ↔ coin box key | Re-pair that tablet number (hold FLASH 3 s) |
+| Tablet ↔ coin box key | Re-pair that tablet number (hotspot Pair tablet tab) |
+| Coin box hotspot password | Hotspot page → Settings tab |
 
 ## Security notes for the server
 * `vendo_dashboard/` is outside the web root; nothing in `public_html` contains secrets.

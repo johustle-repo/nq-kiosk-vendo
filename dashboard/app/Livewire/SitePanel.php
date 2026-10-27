@@ -15,8 +15,9 @@ use Livewire\Attributes\Locked;
 use Livewire\Component;
 
 /**
- * Live view of one site: the coin box (selection, held coins) and its tablets
- * (remaining time, status) with the attendant's controls. Refreshes every 2 s.
+ * Live view of one site: its tablets (remaining time, status, their own coin
+ * box) and, when tablets share one, the shared coin box (selection, held coins)
+ * with the attendant's controls. Refreshes every 2 s.
  */
 class SitePanel extends Component
 {
@@ -24,6 +25,9 @@ class SitePanel extends Component
     public int $siteId;
 
     public ?string $flash = null;
+
+    /** @var array<int, int|string|null> minutes typed per tablet for "Add" */
+    public array $customMinutes = [];
 
     public function mount(Site $site): void
     {
@@ -46,6 +50,11 @@ class SitePanel extends Component
         if (! $this->usable($station)) {
             return;
         }
+        if ($this->site()->controllerForStation($station)?->isKioskCoinBox()) {
+            $this->flash = "Tablet {$station} has its own coin box: its coins always go to it.";
+
+            return;
+        }
         $this->run(fn (Site $s, ControllerChannel $c) => $c->select($s, $station, auth()->user(), request()->ip()),
             "Next coins go to Tablet {$station}.");
     }
@@ -61,8 +70,25 @@ class SitePanel extends Component
         if (! $this->usable($station)) {
             return;
         }
+        $direct = $this->site()->phoneForStation($station)?->takesDashboardTime() === true;
         $this->run(fn (Site $s, ControllerChannel $c) => $c->addTime($s, $station, $minutes * 60, auth()->user(), request()->ip()),
-            "Adding {$minutes} min to Tablet {$station}…");
+            $direct ? "Adding {$minutes} min to Tablet {$station}. It arrives within about 30 seconds."
+                : "Adding {$minutes} min to Tablet {$station}…");
+    }
+
+    /** "Add" with the minutes typed on the tablet's card. */
+    public function addCustomTime(int $station): void
+    {
+        $raw = $this->customMinutes[$station] ?? null;
+        $minutes = is_numeric($raw) ? (int) $raw : 0;
+        $max = intdiv((int) config('vendo.max_admin_credit_seconds'), 60);
+        if ($minutes < 1 || $minutes > $max || (string) $minutes !== trim((string) $raw)) {
+            $this->flash = "Type whole minutes from 1 to {$max}.";
+
+            return;
+        }
+        $this->addTime($station, $minutes);
+        $this->customMinutes[$station] = null;
     }
 
     public function endSession(int $station): void
@@ -129,7 +155,7 @@ class SitePanel extends Component
             return false;
         }
         $site = $this->site();
-        $paired = (bool) ((($site->controller()?->status('stations', []) ?? [])[$station] ?? [])['paired'] ?? false);
+        $paired = (bool) ((($site->controllerForStation($station)?->status('stations', []) ?? [])[$station] ?? [])['paired'] ?? false);
         if ($site->phoneForStation($station) === null && ! $paired) {
             $this->flash = "Tablet {$station} has no tablet enrolled or paired yet.";
 
@@ -155,9 +181,10 @@ class SitePanel extends Component
     {
         $site = $this->site();
         $devices = $site->devices()->whereNull('revoked_at')->get();
-        $controller = $devices->where('device_type', Device::TYPE_CONTROLLER)->sortByDesc('id')->first();
-        $ctlStations = $controller?->status('stations', []) ?? [];
-        $ctlAge = $controller?->status_reported_at ? (int) $controller->status_reported_at->diffInSeconds(now()) : null;
+        $controllers = $devices->where('device_type', Device::TYPE_CONTROLLER)->sortByDesc('id');
+        $controller = $controllers->whereNull('station_no')->first(); // shared coin box
+        $age = fn (?Device $d) => $d?->status_reported_at ? (int) $d->status_reported_at->diffInSeconds(now()) : null;
+        $ctlAge = $age($controller);
 
         $todayStart = now()->startOfDay();
         $perStation = CoinEvent::where('site_id', $site->id)->whereIn('event_type', ['credit', 'assign'])
@@ -177,14 +204,34 @@ class SitePanel extends Component
         $tablets = [];
         for ($n = 1; $n <= Site::MAX_STATIONS; $n++) {
             $phone = $devices->where('device_type', Device::TYPE_PHONE)->where('station_no', $n)->sortByDesc('id')->first();
-            $st = $ctlStations[$n] ?? $ctlStations[(string) $n] ?? null;
+            // Its own coin box, else the shared one. Station status is stored under the site tablet number.
+            $ownBox = $controllers->where('station_no', $n)->first();
+            $box = $ownBox ?? $controller;
+            $boxStations = $box?->status('stations', []) ?? [];
+            $boxAge = $age($box);
+            $st = $boxStations[$n] ?? $boxStations[(string) $n] ?? null;
             $remaining = null;
-            if ($st !== null && $ctlAge !== null) {
-                $remaining = ($st['session'] ?? '') === 'running' ? max(0, (int) $st['remaining_s'] - $ctlAge) : 0;
+            if ($st !== null && $boxAge !== null) {
+                $remaining = ($st['session'] ?? '') === 'running' ? max(0, (int) $st['remaining_s'] - $boxAge) : 0;
+            }
+            // Free time the dashboard gave the tablet itself (it runs after the coin time).
+            $free = 0;
+            if ($phone?->takesDashboardTime() && $phone->presence() === 'online') {
+                $free = (int) $phone->status('dashboard_remaining_s', 0);
+                if ($phone->status('dashboard_running') === true) {
+                    $free = max(0, $free - (int) $age($phone));
+                }
+                if ($free > 0) {
+                    $remaining = ($remaining ?? 0) + $free;
+                }
             }
             $tablets[] = [
                 'n' => $n,
                 'phone' => $phone,
+                'ownBox' => $ownBox,
+                'boxPresence' => $box?->presence() ?? 'none',
+                'boxAge' => $boxAge,
+                'held' => (int) ($ownBox?->held_pulses ?? 0),
                 'presence' => $phone?->presence() ?? 'none',
                 'mode' => $phone?->status('mode'),
                 'locked' => $phone?->status('lock_task') === 'locked',
@@ -197,10 +244,13 @@ class SitePanel extends Component
                 'paired' => (bool) ($st['paired'] ?? false),
                 'usable' => $phone !== null || (bool) ($st['paired'] ?? false),
                 'remaining' => $remaining,
+                'freeTime' => $free,
                 'pesosToday' => (int) ($perStation[$n] ?? 0),
                 'pending' => $pending->get($n, collect())->map(fn (ControllerCommand $c) => $c->type)->all(),
-                'selected' => $boxSelected && $boxSelected['station'] === $n,
-                'wanted' => $wanted === $n,
+                // Selecting is only for tablets that share a coin box.
+                'selectable' => $ownBox === null && $controller !== null,
+                'selected' => $ownBox === null && $boxSelected && $boxSelected['station'] === $n,
+                'wanted' => $ownBox === null && $wanted === $n,
             ];
         }
 
@@ -208,10 +258,13 @@ class SitePanel extends Component
             'site' => $site,
             'controller' => $controller,
             'controllerPresence' => $controller?->presence() ?? 'none',
+            'controllerAge' => $ctlAge,
             'boxSelected' => $boxSelected,
             'wanted' => $wanted,
             'held' => (int) $site->held_pulses,
-            'heldPending' => $pending->flatten()->contains(fn (ControllerCommand $c) => $c->type === 'assign_held'),
+            'heldPending' => $pending->flatten()->contains(fn (ControllerCommand $c) => $c->type === 'assign_held'
+                && ($c->device_id ?? $controller?->id) === $controller?->id),
+            'kioskBoxes' => $controllers->whereNotNull('station_no')->count(),
             'todayTotal' => $todayTotal,
             'tablets' => $tablets,
         ]);

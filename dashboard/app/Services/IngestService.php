@@ -18,7 +18,9 @@ use Illuminate\Support\Facades\DB;
  *    the coin box as an audited dashboard command on /controller/poll.
  *
  * Protocol 1 (one tablet) and protocol 2 (up to 4 tablets, held coins) are both
- * accepted; protocol 1 events belong to station 1.
+ * accepted; protocol 1 events belong to station 1. A kiosk coin box reports its
+ * one tablet as station 1; it is stored under the tablet number it was
+ * enrolled for.
  */
 class IngestService
 {
@@ -68,7 +70,7 @@ class IngestService
         if (! self::isBootId($bootId) || $uptime === null || ! is_array($status)) {
             return self::error('invalid_fields', 'boot_id, uptime_ms and status are required.');
         }
-        $cleanStatus = self::cleanControllerStatus($status);
+        $cleanStatus = self::cleanControllerStatus($status, $device);
         $events = $in['events'] ?? [];
         if (! is_array($events) || count($events) > self::MAX_EVENTS_PER_SYNC) {
             return self::error('too_many_events', 'At most '.self::MAX_EVENTS_PER_SYNC.' events per sync.');
@@ -80,7 +82,7 @@ class IngestService
         $inserted = 0;
         foreach ($events as $ev) {
             $seq = is_array($ev) ? self::intIn($ev['seq'] ?? null, 1, PHP_INT_MAX) : null;
-            $clean = $seq === null ? null : self::validateEvent($ev, $protocol);
+            $clean = $seq === null ? null : self::validateEvent($ev, $protocol, $device);
             if ($clean === null) {
                 if ($seq !== null) {
                     $rejected[] = $seq;
@@ -98,7 +100,9 @@ class IngestService
         $applied = self::intIn($in['config_version_applied'] ?? null, 0, PHP_INT_MAX);
         $this->updateStatus($device, (string) $bootId, $uptime, $cleanStatus, $ip, self::str($in['fw_version'] ?? null, 32), $applied);
         if ($protocol === 2) {
-            Site::whereKey($device->site_id)->update(['held_pulses' => $cleanStatus['held_pulses']]);
+            $device->isKioskCoinBox()
+                ? $device->update(['held_pulses' => $cleanStatus['held_pulses']])
+                : Site::whereKey($device->site_id)->update(['held_pulses' => $cleanStatus['held_pulses']]);
         }
 
         $cfg = $device->site->currentConfig();
@@ -116,7 +120,7 @@ class IngestService
     }
 
     /** @return array<string, mixed> */
-    private static function cleanControllerStatus(array $status): array
+    private static function cleanControllerStatus(array $status, Device $device): array
     {
         $clean = [
             'session' => in_array($status['session'] ?? null, ['idle', 'running'], true) ? $status['session'] : 'unknown',
@@ -126,6 +130,10 @@ class IngestService
             'seconds_per_pulse' => self::intIn($status['seconds_per_pulse'] ?? null, 0, 86400) ?? 0,
             'rate_version' => self::intIn($status['rate_version'] ?? null, 0, PHP_INT_MAX) ?? 0,
             'wifi_rssi' => self::intIn($status['wifi_rssi'] ?? null, -150, 0),
+            'wifi_ssid' => self::str($status['wifi_ssid'] ?? null, 32),
+            // The coin box's address on the shop Wi-Fi (what the tablets connect to).
+            'local_ip' => is_string($status['local_ip'] ?? null) && filter_var($status['local_ip'], FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)
+                ? $status['local_ip'] : null,
             'free_heap' => self::intIn($status['free_heap'] ?? null, 0, 1 << 20),
             'buffered_events' => self::intIn($status['buffered_events'] ?? null, 0, 1000) ?? 0,
             'dropped_events' => self::intIn($status['dropped_events'] ?? null, 0, PHP_INT_MAX) ?? 0,
@@ -135,7 +143,8 @@ class IngestService
         ];
         // Protocol 2: one entry per tablet.
         foreach (array_slice(is_array($status['stations'] ?? null) ? $status['stations'] : [], 0, Site::MAX_STATIONS) as $s) {
-            $n = is_array($s) ? self::intIn($s['station'] ?? null, 1, Site::MAX_STATIONS) : null;
+            $local = is_array($s) ? self::intIn($s['station'] ?? null, 1, Site::MAX_STATIONS) : null;
+            $n = $local === null ? null : $device->siteStation($local);
             if ($n === null) {
                 continue;
             }
@@ -149,7 +158,7 @@ class IngestService
         }
         // Protocol 1: the single session is station 1.
         if ($clean['stations'] === []) {
-            $clean['stations'][1] = [
+            $clean['stations'][$device->siteStation(1)] = [
                 'session' => $clean['session'], 'remaining_s' => $clean['remaining_s'], 'session_no' => $clean['session_no'],
                 'paired' => true, 'phone_last_poll_age_s' => $clean['phone_last_poll_age_s'],
             ];
@@ -159,14 +168,15 @@ class IngestService
     }
 
     /** @return array<string, int|string>|null */
-    private static function validateEvent(array $ev, int $protocol): ?array
+    private static function validateEvent(array $ev, int $protocol, Device $device): ?array
     {
         $type = $ev['type'] ?? null;
         $types = $protocol === 1 ? ['credit', 'expire'] : CoinEvent::TYPES;
         if (! in_array($type, $types, true)) {
             return null;
         }
-        $station = $protocol === 1 ? 1 : self::intIn($ev['station'] ?? null, 0, Site::MAX_STATIONS);
+        $local = $protocol === 1 ? 1 : self::intIn($ev['station'] ?? null, 0, Site::MAX_STATIONS);
+        $station = $local === null ? null : $device->siteStation($local);
         $clean = [
             'type' => $type,
             'station' => $station,
@@ -294,6 +304,7 @@ class IngestService
         $ctl = is_array($in['controller'] ?? null) ? $in['controller'] : [];
         $pk = is_array($in['allowed_packages'] ?? null) ? $in['allowed_packages'] : [];
         $battery = is_array($in['battery'] ?? null) ? $in['battery'] : [];
+        $dash = is_array($in['dashboard_time'] ?? null) ? $in['dashboard_time'] : [];
         $station = self::intIn($ctl['station'] ?? null, 1, Site::MAX_STATIONS);
         $status = [
             'mode' => in_array($in['mode'] ?? null, ['demo', 'production', 'unconfigured'], true) ? $in['mode'] : 'unknown',
@@ -312,11 +323,18 @@ class IngestService
             'battery_pct' => self::intIn($battery['pct'] ?? null, 0, 100),
             'charging' => ($battery['charging'] ?? null) === true,
             'tap_admin' => ($in['tap_admin'] ?? null) === true,
+            'features' => array_values(array_filter(array_slice(is_array($in['features'] ?? null) ? $in['features'] : [], 0, 16),
+                static fn ($f) => is_string($f) && preg_match('/^[a-z_]{1,32}$/', $f) === 1)),
+            'dashboard_remaining_s' => self::intIn($dash['remaining_s'] ?? null, 0, 30 * 86400) ?? 0,
+            'dashboard_running' => ($dash['running'] ?? null) === true,
         ];
         $applied = self::intIn($in['config_version_applied'] ?? null, 0, PHP_INT_MAX);
         $this->updateStatus($device, (string) $bootId, $uptime, $status, $ip, self::str($in['app_version'] ?? null, 32), $applied);
-        // A tablet enrolled without a number adopts the one it paired with.
-        if ($device->station_no === null && $station !== null) {
+        // A tablet enrolled without a number adopts the one it paired with on a
+        // shared coin box (on its own kiosk coin box it is always station 1).
+        $kioskBoxes = $device->site->devices()->where('device_type', Device::TYPE_CONTROLLER)
+            ->whereNotNull('station_no')->whereNull('revoked_at')->exists();
+        if ($device->station_no === null && $station !== null && ! $kioskBoxes) {
             $device->update(['station_no' => $station]);
         }
         $cfg = $device->site->currentConfig();

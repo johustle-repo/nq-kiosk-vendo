@@ -20,8 +20,9 @@
         <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             @foreach ($sites as $site)
                 @php
-                    $ctl = $site->controller();
+                    $boxes = $site->devices()->where('device_type', 'controller')->whereNull('revoked_at')->get();
                     $tablets = $site->devices()->where('device_type', 'phone')->whereNull('revoked_at')->get();
+                    $held = (int) $site->held_pulses + (int) $boxes->whereNotNull('station_no')->sum('held_pulses');
                 @endphp
                 <a href="{{ route('sites.show', $site) }}" class="card block transition hover:border-brand hover:shadow-md">
                     <div class="flex items-start justify-between">
@@ -30,10 +31,11 @@
                     </div>
                     <p class="muted">today</p>
                     <div class="mt-3 flex flex-wrap gap-2 text-xs font-semibold">
-                        <span class="pill {{ ($ctl?->presence() ?? '') === 'online' ? 'bg-brand-soft text-brand-deep' : 'bg-zinc-100 text-zinc-500' }}">Coin box: {{ $ctl?->presence() ?? 'not enrolled' }}</span>
+                        @php $boxesOnline = $boxes->filter(fn ($b) => $b->presence() === 'online')->count(); @endphp
+                        <span class="pill {{ $boxes->isNotEmpty() && $boxesOnline === $boxes->count() ? 'bg-brand-soft text-brand-deep' : 'bg-zinc-100 text-zinc-500' }}">{{ $boxes->isEmpty() ? 'Coin box: not enrolled' : $boxesOnline.' / '.$boxes->count().' coin boxes online' }}</span>
                         <span class="pill bg-zinc-100 text-charcoal">{{ $tablets->filter(fn ($t) => $t->presence() === 'online')->count() }} / {{ $tablets->count() }} tablets online</span>
-                        @if ($site->held_pulses > 0)
-                            <span class="pill bg-coin-soft text-coin">₱{{ $site->held_pulses }} held</span>
+                        @if ($held > 0)
+                            <span class="pill bg-coin-soft text-coin">₱{{ $held }} held</span>
                         @endif
                     </div>
                 </a>

@@ -6,8 +6,8 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-/** Dashboard → coin box command, re-sent on every poll until acknowledged. */
-#[Fillable(['site_id', 'type', 'station_no', 'seconds', 'created_by', 'created_at', 'delivered_at', 'applied_at', 'result'])]
+/** Dashboard → coin box (or tablet) command, re-sent on every poll or heartbeat until acknowledged. */
+#[Fillable(['site_id', 'device_id', 'type', 'station_no', 'seconds', 'created_by', 'created_at', 'delivered_at', 'applied_at', 'result'])]
 class ControllerCommand extends Model
 {
     public const UPDATED_AT = null;

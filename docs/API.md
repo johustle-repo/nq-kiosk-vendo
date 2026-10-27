@@ -76,6 +76,13 @@ Response `201` (the token is shown **once**):
 Fast channel for the attendant. Sent on the same kept-alive TLS connection as
 sync and the `status.php` upload.
 
+**Kiosk coin box** (enrolled with a tablet number N, one tablet per box): the
+box knows its tablet as station 1. The cloud stores the box's station 1 events
+and status under tablet N, sends only tablet N's commands with `"station": 1`,
+keeps `held_pulses` on the box itself, and always answers
+`"selection": {"version": 0, "station": 0, "ttl_s": 0}`. A coin box enrolled
+without a number is shared and works as below.
+
 ```json
 { "boot_id": "0a1b2c3d", "selected": 2, "selected_ttl_s": 74, "held_pulses": 5,
   "acks": [ { "id": 41, "result": "ok" } ] }
@@ -118,7 +125,7 @@ Every `sync_interval_s` (default 15 s) and ~3 s after a coin. Protocol **2**
   "config_version_applied": 1,
   "status": {
     "session": "running", "remaining_s": 420, "seq": 9, "session_no": 1,
-    "seconds_per_pulse": 240, "rate_version": 1, "wifi_rssi": -61, "free_heap": 21800,
+    "seconds_per_pulse": 240, "rate_version": 1, "wifi_rssi": -61, "wifi_ssid": "ShopWiFi", "local_ip": "192.168.0.105", "free_heap": 21800,
     "buffered_events": 1, "dropped_events": 0, "held_pulses": 0,
     "stations": [
       { "station": 1, "session": "running", "remaining_s": 420, "session_no": 1, "paired": true, "phone_last_poll_age_s": 1 },
@@ -160,7 +167,10 @@ Response `200`:
   "mode": "production", "device_owner": true, "lock_task": "locked", "access": "granted",
   "controller": { "paired": true, "station": 2, "link": "connected", "last_ok_age_s": 0, "remaining_s": 1180 },
   "allowed_packages": ["com.google.android.youtube"],
-  "config_version_applied": 2, "model": "TECNO KL5", "android_sdk": 34
+  "config_version_applied": 2, "model": "TECNO KL5", "android_sdk": 34,
+  "features": ["dashboard_time"],
+  "dashboard_time": { "remaining_s": 600, "running": false },
+  "acks": [{ "id": 57, "result": "ok" }]
 }
 ```
 
@@ -168,8 +178,20 @@ A tablet enrolled without a number adopts `controller.station`. Response:
 
 ```json
 { "ok": true, "server_time": 1791095230,
-  "config": { "version": 2, "allowed_packages": ["com.google.android.youtube"], "local_loss_timeout_s": 30, "seconds_per_pulse": 240 } }
+  "config": { "version": 2, "allowed_packages": ["com.google.android.youtube"], "local_loss_timeout_s": 30, "seconds_per_pulse": 240 },
+  "commands": [{ "id": 58, "type": "add_time", "seconds": 900 }] }
 ```
+
+**Dashboard time (app 1.2.0+).** A tablet that lists `dashboard_time` in
+`features` receives the dashboard's "+N min" (`add_time`) and `end_session`
+itself, in `commands`, instead of through its coin box. Each command is
+applied once by id (the tablet remembers the last 50) and re-sent until the
+tablet acknowledges it in `acks` on a later heartbeat; a tablet can only
+acknowledge its own commands. The tablet keeps this free time (it survives an
+app restart) and uses it after any paid coin time, so it also works with no
+coin box paired; in production it still needs Device Owner. "End session"
+goes to both the tablet and its coin box. Older tablet apps keep getting time
+through the coin box.
 
 ### Dashboard (browser session, not for devices)
 
@@ -178,7 +200,7 @@ A tablet enrolled without a number adopts `controller.station`. Response:
 | `GET/POST /setup` | first admin + migrations; needs `SETUP_TOKEN`; 404 once an admin exists |
 | `GET/POST /login`, `POST /logout` | username sign-in; 5/min per username+IP, 20/min per IP |
 | `GET /sites`, `POST /sites` | sites owned by the signed-in admin; create a site |
-| `GET /sites/{site}` | live panel (Livewire, refreshes every 2 s): select tablet, +5/+15/+30 min, end session, give held coins; enrollment, configuration, devices, recent coins |
+| `GET /sites/{site}` | live panel (Livewire, refreshes every 2 s): select tablet, +5/+15/+30 min or typed minutes (1–240), end session, give held coins; enrollment, configuration, devices, recent coins |
 | `POST /sites/{site}/config`, `POST /sites/{site}/enroll` | new config version; one-time enrollment code |
 | `POST /devices/{device}/revoke` | revoke a credential |
 | `GET /audit`, `GET /account`, `POST /account/password` | audit log; password change |
@@ -201,7 +223,8 @@ added only by coins and by dashboard commands (see `/controller/poll`).
 
 ### `POST /api/v1/pair` — physical pairing
 
-Only while the pairing window is open (hold FLASH 3 s or serial `pair`; the LCD
+Only while the pairing window is open (hotspot **Pair tablet** tab, hold FLASH
+3 s, or serial `pair`; the LCD
 shows a 6-digit code for 120 s). Max 5 attempts per window.
 
 Request: `code=482915&phone_id=<uuid>&station=2`
@@ -244,9 +267,16 @@ and `ctr` strictly increases per tablet within a boot.
 
 Errors: `409 stale_command`, `403 bad_mac`, `403 not_paired`, `400 bad_station`.
 
-### Wi-Fi setup portal (setup mode only)
+### Admin hotspot settings page
 
-`GET /` and `POST /save` on `http://192.168.4.1` while the coin box runs its own
-WPA2 access point `VendoCoin-xxxxxx` (password on the LCD). Fields: `ssid`,
-`pass`, `name`, `enroll` (cloud enrollment code), `api` (HTTPS URL), and the
-`status.php` upload settings.
+Served on `http://192.168.4.1` only to devices joined to the coin box's always-on
+WPA2 hotspot `VendoCoin-xxxxxx` (`404` over the shop Wi-Fi). `GET /?tab=wifi|pair|settings`.
+Every POST carries the page's per-boot form token `t` (`403` otherwise):
+
+| POST | Fields | Effect |
+|---|---|---|
+| `/wifi` | `ssid`, `pass` | save and connect to the shop Wi-Fi (no restart) |
+| `/scan` | | scan for networks (listed on the next page load) |
+| `/pair-code` | | open the 2-minute pairing window with a new code |
+| `/settings` | `name`, `enroll`, `api`, `status_url`, `status_device`, `status_token`, `status_clear` | save |
+| `/hotspot` | `pass` (8–15 characters) | change the hotspot password |

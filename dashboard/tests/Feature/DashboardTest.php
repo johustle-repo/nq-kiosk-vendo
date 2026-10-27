@@ -4,6 +4,7 @@ use App\Livewire\SitePanel;
 use App\Models\AuditLog;
 use App\Models\ControllerCommand;
 use App\Models\Device;
+use App\Models\EnrollmentCode;
 use App\Models\Site;
 use App\Models\SiteConfig;
 use App\Models\User;
@@ -220,4 +221,31 @@ it('refuses to open admin on an empty tablet slot', function () {
     $this->actingAs($site->owner);
     Livewire::test(SitePanel::class, ['site' => $site])
         ->call('openAdmin', 3)->assertSet('flash', 'Tablet 3 is not connected to the dashboard.');
+});
+
+it('shows each tablet\'s own coin box and its held coins', function () {
+    $site = site();
+    [$box] = enrollDevice($site, 'controller', 2);
+    enrollDevice($site, 'phone', 2);
+    $box->update([
+        'status_json' => ['wifi_ssid' => 'ShopNet', 'local_ip' => '192.168.0.50',
+            'stations' => ['2' => ['session' => 'running', 'remaining_s' => 600, 'session_no' => 1, 'paired' => true]]],
+        'status_reported_at' => now(), 'last_seen_at' => now(), 'held_pulses' => 3,
+    ]);
+    $this->actingAs($site->owner);
+
+    Livewire::test(SitePanel::class, ['site' => $site])
+        ->assertSee('Coin boxes')->assertSee('ShopNet')->assertSee('192.168.0.50')->assertSee('₱3 held')
+        ->assertSee('00:10:0')->assertDontSee('Select for next coins')
+        ->call('select', 2)->assertSee('has its own coin box')
+        ->call('assignHeld', 2);
+    expect(ControllerCommand::sole()->device_id)->toBe($box->id);
+});
+
+it('creates a coin box enrollment code for one tablet or a shared one', function () {
+    $site = site();
+    $this->actingAs($site->owner);
+    $this->post(route('sites.enroll', $site), ['device_type' => 'controller', 'station_no' => 3])->assertRedirect();
+    $this->post(route('sites.enroll', $site), ['device_type' => 'controller', 'station_no' => ''])->assertRedirect();
+    expect(EnrollmentCode::orderBy('id')->pluck('station_no')->all())->toBe([3, null]);
 });

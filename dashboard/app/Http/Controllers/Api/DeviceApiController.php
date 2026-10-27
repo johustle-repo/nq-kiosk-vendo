@@ -93,7 +93,14 @@ class DeviceApiController extends Controller
 
     public function phoneHeartbeat(Request $request): JsonResponse
     {
-        return self::reply($this->ingest->phoneHeartbeat(self::device($request), self::json($request), (string) $request->ip()));
+        $device = self::device($request);
+        $in = self::json($request);
+        $r = $this->ingest->phoneHeartbeat($device, $in, (string) $request->ip());
+        if ($r['status'] === 200) {
+            $r['body']['commands'] = $this->channel->tabletCommands($device, $in['acks'] ?? null);
+        }
+
+        return self::reply($r);
     }
 
     private static function device(Request $request): Device

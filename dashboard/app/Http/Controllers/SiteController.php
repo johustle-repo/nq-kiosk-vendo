@@ -70,7 +70,8 @@ class SiteController extends Controller
             'device_type' => ['required', Rule::in([Device::TYPE_CONTROLLER, Device::TYPE_PHONE])],
             'station_no' => ['nullable', 'required_if:device_type,phone', 'integer', 'between:1,'.Site::MAX_STATIONS],
         ]);
-        $station = $data['device_type'] === Device::TYPE_PHONE ? (int) $data['station_no'] : null;
+        // Coin box: a tablet number makes it that tablet's own coin box, none (or "shared") a shared one.
+        $station = isset($data['station_no']) ? (int) $data['station_no'] : null;
         $code = $this->sites->createEnrollmentCode($site, $request->user(), $data['device_type'], $station);
         AuditLog::record('site.enroll_code', $request->user()->id, $site->id, null, ['type' => $data['device_type'], 'station' => $station], $request->ip());
 

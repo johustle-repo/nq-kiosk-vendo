@@ -7,7 +7,10 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-/** One coin box shared by up to [Site::MAX_STATIONS] tablets. */
+/**
+ * A shop with up to [Site::MAX_STATIONS] tablets. Each tablet has its own kiosk
+ * coin box, or all share one coin box (the original design).
+ */
 #[Fillable(['owner_id', 'name', 'selected_station', 'selection_expires_at', 'selection_version',
     'reported_station', 'reported_ttl_s', 'held_pulses', 'last_poll_at'])]
 class Site extends Model
@@ -47,11 +50,18 @@ class Site extends Model
         return $this->configs()->orderByDesc('version')->firstOrFail();
     }
 
-    /** The active (non-revoked) coin box, if enrolled. */
+    /** The active (non-revoked) shared coin box, if enrolled. */
     public function controller(): ?Device
     {
-        return $this->devices()->where('device_type', Device::TYPE_CONTROLLER)
+        return $this->devices()->where('device_type', Device::TYPE_CONTROLLER)->whereNull('station_no')
             ->whereNull('revoked_at')->latest('id')->first();
+    }
+
+    /** The coin box that takes tablet N's coins: its own kiosk coin box, else the shared one. */
+    public function controllerForStation(int $station): ?Device
+    {
+        return $this->devices()->where('device_type', Device::TYPE_CONTROLLER)->where('station_no', $station)
+            ->whereNull('revoked_at')->latest('id')->first() ?? $this->controller();
     }
 
     /** Active tablet for a station number, if enrolled. */

@@ -17,7 +17,7 @@
             @if ($newCode)
                 <div class="mb-4 rounded-xl border-2 border-dashed border-brand p-4">
                     <p class="text-sm font-semibold">
-                        {{ $newCode['type'] === 'phone' ? 'Tablet '.$newCode['station'] : 'Coin box' }} enrollment code — shown once:
+                        {{ $newCode['type'] === 'phone' ? 'Tablet '.$newCode['station'] : ($newCode['station'] ? 'Tablet '.$newCode['station'].' coin box' : 'Shared coin box') }} enrollment code — shown once:
                     </p>
                     <p class="my-1 select-all font-mono text-3xl font-black tracking-widest">{{ $newCode['code'] }}</p>
                     <p class="muted">{{ $newCode['type'] === 'phone' ? 'On the tablet: Admin → Cloud → enter this code.' : 'On the coin box: Wi-Fi setup page → cloud enrollment code.' }}</p>
@@ -36,11 +36,12 @@
                         @for ($n = 1; $n <= \App\Models\Site::MAX_STATIONS; $n++)
                             <option value="{{ $n }}">Tablet {{ $n }}</option>
                         @endfor
+                        <option value="">Shared by all tablets (coin box only)</option>
                     </select>
                 </label>
                 <button class="btn-primary">Create code</button>
             </form>
-            <p class="muted mt-2">The tablet number is ignored for a coin box.</p>
+            <p class="muted mt-2">Each tablet has its own coin box: enroll the coin box with the same tablet number as its tablet. Choose <em>Shared by all tablets</em> only for one coin box serving several tablets.</p>
         </section>
 
         {{-- Configuration --}}
@@ -79,7 +80,7 @@
                 @forelse ($devices as $d)
                     <tr>
                         <td class="py-2 font-semibold">{{ $d->name }} <span class="block font-mono text-xs text-zinc-400">{{ $d->public_id }}</span></td>
-                        <td>{{ $d->device_type === 'phone' ? 'Tablet '.($d->station_no ?? '?') : 'Coin box' }}</td>
+                        <td>{{ $d->device_type === 'phone' ? 'Tablet '.($d->station_no ?? '?') : ($d->station_no ? 'Coin box · Tablet '.$d->station_no : 'Coin box · shared') }}</td>
                         <td>{{ $d->presence() }}</td>
                         <td>{{ $d->last_seen_at?->diffForHumans() ?? 'never' }}</td>
                         <td>{{ $d->sw_version ?? '—' }}</td>

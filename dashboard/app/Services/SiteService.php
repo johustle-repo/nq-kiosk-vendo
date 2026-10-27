@@ -113,7 +113,8 @@ class SiteService
         EnrollmentCode::create([
             'site_id' => $site->id,
             'device_type' => $deviceType,
-            'station_no' => $deviceType === Device::TYPE_PHONE ? $station : null,
+            // A coin box with a number is that tablet's own coin box; without one it is shared.
+            'station_no' => $station,
             'code_hash' => EnrollmentCode::hash($code),
             'created_by' => $by->id,
             'created_at' => now(),
