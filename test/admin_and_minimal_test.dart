@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vendo_kiosk/main.dart';
 import 'package:vendo_kiosk/src/bridge/kiosk_bridge.dart';
 import 'package:vendo_kiosk/src/kiosk_controller.dart';
+import 'package:vendo_kiosk/src/ui/admin/admin_ui.dart';
 
 import 'fake_bridge.dart';
 
@@ -22,6 +23,19 @@ Future<FakeKioskBridge> pump(
   await tester.pumpWidget(VendoKioskApp(controller: KioskController(bridge)));
   await tester.pumpAndSettle();
   return bridge;
+}
+
+/// Scrolls the admin page until [target] is built and visible.
+Future<void> scrollTo(WidgetTester tester, Finder target) async {
+  await tester.scrollUntilVisible(
+    target,
+    200,
+    // The page's own scroll view (text fields have one of their own).
+    scrollable: find
+        .ancestor(of: find.byType(AdminSection).first, matching: find.byType(Scrollable))
+        .first,
+  );
+  await tester.pumpAndSettle();
 }
 
 Future<void> tapTimer(
@@ -241,6 +255,115 @@ void main() {
       expect(bridge.calls, contains('autoCharge:false:20:90'));
     });
 
+    testWidgets('Wi-Fi page shows the connection, tests the coin box and joins a network', (
+      tester,
+    ) async {
+      final bridge = await pump(
+        tester,
+        const Size(1280, 800),
+        snapshot(unlocked: true),
+      );
+      bridge
+        ..wifi = const WifiStatus(
+          enabled: true,
+          connected: true,
+          ssid: 'Shop-WiFi',
+          ip: '192.168.0.110',
+          gateway: '192.168.0.1',
+          rssi: -48,
+          frequencyMhz: 2437,
+          internet: true,
+          defaultIsWifi: true,
+          deviceOwner: true,
+        )
+        ..networks = const [
+          WifiNetwork(ssid: 'Shop-WiFi', rssi: -48, connected: true),
+          WifiNetwork(ssid: 'Shop 5G', rssi: -60, frequencyMhz: 5180),
+        ];
+      await openAdmin(tester);
+      await tester.tap(
+        find.descendant(
+          of: find.byType(NavigationRail),
+          matching: find.text('Wi-Fi'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('CONNECTED'), findsOneWidget);
+      expect(find.text('Shop-WiFi'), findsOneWidget);
+      expect(find.text('Excellent (-48 dBm)'), findsOneWidget);
+
+      await scrollTo(tester, find.byKey(const Key('wifi-scan')));
+      await tester.tap(find.byKey(const Key('wifi-scan')));
+      await tester.pumpAndSettle();
+      expect(bridge.calls, contains('wifiScan'));
+      await scrollTo(tester, find.byKey(const Key('wifi-Shop 5G')));
+      await tester.tap(find.byKey(const Key('wifi-Shop 5G')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('wifi-password')), 'secret123');
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('wifi-join')));
+      await tester.pump();
+      expect(bridge.calls, contains('wifiConnect:Shop 5G:wpa2'));
+      // Let the status re-checks after joining finish.
+      await tester.pump(const Duration(seconds: 20));
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('coin box page finds a one-tablet coin box and pairs as Tablet 1', (
+      tester,
+    ) async {
+      final bridge = await pump(
+        tester,
+        const Size(1280, 800),
+        snapshot(unlocked: true),
+      );
+      bridge.coinBoxes = const [
+        CoinBoxInfo(
+          address: '192.168.0.106:80',
+          deviceId: 'vk-f6e705',
+          fwVersion: '2.4.0',
+          stations: 1,
+          paired: [false],
+          pairingOpen: true,
+        ),
+      ];
+      await openAdmin(tester);
+      await tester.tap(
+        find.descendant(
+          of: find.byType(NavigationRail),
+          matching: find.text('Coin box'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await scrollTo(tester, find.byKey(const Key('coinbox-find')));
+      await tester.tap(find.byKey(const Key('coinbox-find')));
+      await tester.pumpAndSettle();
+      expect(bridge.calls, contains('findCoinBoxes'));
+      expect(find.text('vk-f6e705 · 192.168.0.106'), findsOneWidget);
+      expect(find.text('192.168.0.106'), findsOneWidget); // filled into the address field
+      expect(find.text('This coin box serves one tablet: Tablet 1'), findsOneWidget);
+    });
+
+    testWidgets('apps page opens Google Play for the administrator', (tester) async {
+      final bridge = await pump(
+        tester,
+        const Size(1280, 800),
+        snapshot(unlocked: true),
+      );
+      await openAdmin(tester);
+      await tester.tap(
+        find.descendant(
+          of: find.byType(NavigationRail),
+          matching: find.text('Apps'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Install apps from Google Play'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('open-play')));
+      await tester.pumpAndSettle();
+      expect(bridge.calls, contains('openAppStore'));
+    });
+
     testWidgets('ad blocking switch on the system page', (tester) async {
       final bridge = await pump(
         tester,
@@ -256,22 +379,46 @@ void main() {
       );
       await tester.pumpAndSettle();
       final ads = find.byKey(const Key('block-ads'));
-      await tester.scrollUntilVisible(
-        ads,
-        300,
-        scrollable: find
-            .ancestor(
-              of: find.text('Administrator PIN').first,
-              matching: find.byType(Scrollable),
-            )
-            .first,
-      );
+      await scrollTo(tester, ads);
       await tester.ensureVisible(ads);
       await tester.pumpAndSettle();
       expect(find.text('Ad blocking'), findsOneWidget);
       await tester.tap(ads);
       await tester.pumpAndSettle();
       expect(bridge.calls, contains('blockAds:false'));
+    });
+
+    testWidgets('brightness slider and automatic switch on the system page', (
+      tester,
+    ) async {
+      final bridge = await pump(
+        tester,
+        const Size(1280, 800),
+        snapshot(mode: 'production', deviceOwner: true, unlocked: true),
+      );
+      await openAdmin(tester);
+      await tester.tap(
+        find.descendant(
+          of: find.byType(NavigationRail),
+          matching: find.text('System'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final auto = find.byKey(const Key('brightness-auto'));
+      await scrollTo(tester, auto);
+      expect(find.text('Screen brightness'), findsOneWidget);
+      expect(find.text('60%'), findsOneWidget);
+
+      final slider = find.byKey(const Key('brightness'));
+      await tester.ensureVisible(slider);
+      await tester.pumpAndSettle();
+      await tester.drag(slider, const Offset(-2000, 0));
+      await tester.pumpAndSettle();
+      expect(bridge.calls, contains('brightness:1:false'));
+
+      await tester.tap(auto);
+      await tester.pumpAndSettle();
+      expect(bridge.calls, contains('brightness:60:true'));
     });
 
     testWidgets('lock button closes admin and locks it', (tester) async {
@@ -296,6 +443,7 @@ void main() {
       await openAdmin(tester);
       await tester.tap(find.text('Apps').last);
       await tester.pumpAndSettle();
+      await scrollTo(tester, find.byKey(const Key('select-com.example.video')));
       await tester.tap(find.byKey(const Key('select-com.example.video')));
       await tester.pumpAndSettle();
       expect(find.textContaining('unsaved'), findsOneWidget);

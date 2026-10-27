@@ -173,6 +173,19 @@ class FakeKioskBridge implements KioskBridge {
       calls.add('blockAds:$enabled');
 
   @override
+  Future<void> setSounds(bool enabled) async => calls.add('sounds:$enabled');
+
+  @override
+  Future<void> setBrightness(int percent, {required bool auto}) async =>
+      calls.add('brightness:$percent:$auto');
+
+  @override
+  Future<void> openAppStore() async => calls.add('openAppStore');
+
+  @override
+  Future<void> closeAppStore() async => calls.add('closeAppStore');
+
+  @override
   Future<void> setKeepWirelessAdb(bool enabled) async =>
       calls.add('keepWirelessAdb:$enabled');
 
@@ -190,6 +203,40 @@ class FakeKioskBridge implements KioskBridge {
   @override
   Future<void> openLockScreenSettings() async =>
       calls.add('openLockScreenSettings');
+
+  WifiStatus wifi = const WifiStatus();
+  List<WifiNetwork> networks = const [];
+  List<CoinBoxInfo> coinBoxes = const [];
+  CoinBoxTest coinBoxTest = const CoinBoxTest(ok: false, error: 'timeout');
+
+  @override
+  Future<WifiStatus> wifiStatus() async => wifi;
+
+  @override
+  Future<List<WifiNetwork>> wifiScan() async {
+    calls.add('wifiScan');
+    return networks;
+  }
+
+  @override
+  Future<void> wifiConnect(String ssid, String password, String security) async =>
+      calls.add('wifiConnect:$ssid:$security');
+
+  @override
+  Future<void> wifiSetEnabled(bool enabled) async =>
+      calls.add('wifiSetEnabled:$enabled');
+
+  @override
+  Future<CoinBoxTest> testCoinBox([String? address]) async {
+    calls.add('testCoinBox:${address ?? ''}');
+    return coinBoxTest;
+  }
+
+  @override
+  Future<List<CoinBoxInfo>> findCoinBoxes() async {
+    calls.add('findCoinBoxes');
+    return coinBoxes;
+  }
 }
 
 /// Builds a native-style snapshot map with sensible defaults.
@@ -261,6 +308,8 @@ Map<Object?, Object?> snapshot({
     'idleSleepS': idleSleepS,
     'screenOffS': screenOffS,
     'blockAds': true,
+    'brightnessPct': 60,
+    'brightnessAuto': false,
     'keepWirelessAdb': true,
     'tapAdmin': tapAdmin,
     'allowAccounts': true,
@@ -284,4 +333,5 @@ Map<Object?, Object?> snapshot({
     'openSeq': adminOpenSeq,
   },
   'demoRemainingMs': 0,
+  'dashboardRemainingMs': 0,
 };

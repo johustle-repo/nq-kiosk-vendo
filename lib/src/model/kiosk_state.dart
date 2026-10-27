@@ -48,6 +48,10 @@ class KioskState {
     this.idleSleepS = 60,
     this.screenOffS = 60,
     this.blockAds = true,
+    this.sounds = true,
+    this.brightnessPct = 50,
+    this.brightnessAuto = false,
+    this.appStoreOpenS = 0,
     this.keepWirelessAdb = true,
     this.tapAdmin = false,
     this.allowAccounts = true,
@@ -68,6 +72,7 @@ class KioskState {
     this.adminOpenSeq = 0,
     this.pinLockoutMs = 0,
     this.demoRemainingMs = 0,
+    this.dashboardRemainingMs = 0,
     this.loaded = false,
     this.preview = false,
   });
@@ -130,6 +135,16 @@ class KioskState {
   /// Ad-blocking Private DNS in production (setting / applied / last problem).
   final bool blockAds;
 
+  /// Coin chime and low-time beeps.
+  final bool sounds;
+
+  /// Tablet-wide screen brightness (1-100 %) and automatic brightness.
+  final int brightnessPct;
+  final bool brightnessAuto;
+
+  /// Seconds left of the administrator's Google Play window (0 = closed).
+  final int appStoreOpenS;
+
   /// Turn wireless debugging back on when Android switches it off / is it on now.
   final bool keepWirelessAdb;
 
@@ -168,6 +183,9 @@ class KioskState {
   final int adminOpenSeq;
   final int pinLockoutMs;
   final int demoRemainingMs;
+
+  /// Free time given from the dashboard, used after the coin time.
+  final int dashboardRemainingMs;
 
   /// False until the first snapshot from the native side has arrived.
   final bool loaded;
@@ -262,6 +280,10 @@ class KioskState {
       idleSleepS: _int(settings['idleSleepS']) ?? 60,
       screenOffS: _int(settings['screenOffS']) ?? 60,
       blockAds: settings['blockAds'] != false,
+      sounds: settings['sounds'] != false,
+      brightnessPct: _int(settings['brightnessPct']) ?? 50,
+      brightnessAuto: settings['brightnessAuto'] == true,
+      appStoreOpenS: _int(settings['appStoreOpenS']) ?? 0,
       keepWirelessAdb: settings['keepWirelessAdb'] != false,
       tapAdmin: settings['tapAdmin'] == true,
       allowAccounts: settings['allowAccounts'] != false,
@@ -282,6 +304,7 @@ class KioskState {
       adminOpenSeq: _int(admin['openSeq']) ?? 0,
       pinLockoutMs: _int(admin['lockoutMs']) ?? 0,
       demoRemainingMs: _int(m['demoRemainingMs']) ?? 0,
+      dashboardRemainingMs: _int(m['dashboardRemainingMs']) ?? 0,
     );
   }
 }

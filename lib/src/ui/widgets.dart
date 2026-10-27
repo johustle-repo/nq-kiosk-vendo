@@ -1218,9 +1218,27 @@ String errorText(Object e) {
         'This app is not the Device Owner. See the provisioning instructions.',
     'wrong_code': 'Wrong pairing code.',
     'pairing_closed':
-        'Pairing is not open. Hold the controller FLASH button for 3 seconds first.',
+        'Pairing is not open. Generate a code on the coin box hotspot (Pair tablet) or hold its FLASH button for 3 seconds first.',
     'too_many_attempts':
         'Too many wrong codes. Re-open pairing on the controller.',
+    'bad_station':
+        'This coin box serves only one tablet. Pair it as Tablet 1.',
+    'bad_brightness': 'Brightness must be between 1 and 100%.',
+    'play_store_missing': 'Google Play is not installed on this tablet.',
+    'not_a_coin_box':
+        'Something answers at that address, but it is not a coin box. Use Find coin box.',
+    'no_wifi': 'The tablet is not on a Wi-Fi network. Join one on the Wi-Fi page.',
+    'location_off':
+        'Android needs location on to scan Wi-Fi, and the kiosk could not turn it on (Device Owner on Android 11+ needed).',
+    'wifi_off': 'Wi-Fi is off. Turn it on first.',
+    'wifi_add_failed':
+        'Android refused the network. Check the name and security type.',
+    'wifi_connect_failed': 'Could not start joining the network. Try again.',
+    'wifi_toggle_failed': 'Android did not change the Wi-Fi state.',
+    'bad_wifi_password': 'Wi-Fi passwords have 8 to 63 characters.',
+    'bad_ssid': 'Enter a network name of up to 32 characters.',
+    'unsupported_security':
+        'This kind of network (enterprise/WEP) is not supported.',
     'unreachable': 'Cannot reach the controller at that address.',
     'timeout': 'The controller did not answer in time.',
     'bad_address': 'Enter a private IPv4 address such as 192.168.1.50.',

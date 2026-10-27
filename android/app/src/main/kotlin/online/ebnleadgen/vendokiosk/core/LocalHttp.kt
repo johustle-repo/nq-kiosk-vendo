@@ -22,6 +22,12 @@ class LocalHttp(
     private val connectTimeoutMs: Int = 1500,
     private val readTimeoutMs: Int = 2500,
     private val maxResponseBytes: Int = 16 * 1024,
+    /**
+     * Makes the socket. The app passes one bound to the Wi-Fi network: when the
+     * Wi-Fi has no internet Android sends traffic over mobile data, where the
+     * coin box's private address cannot be reached.
+     */
+    private val newSocket: () -> Socket = { Socket() },
 ) {
     companion object {
         /** Accepts "a.b.c.d" or "a.b.c.d:port" in 10/8, 172.16/12, 192.168/16 or 169.254/16. */
@@ -69,7 +75,7 @@ class LocalHttp(
             }
             append("\r\n")
         }
-        Socket().use { s ->
+        newSocket().use { s ->
             s.connect(InetSocketAddress(host, port), connectTimeoutMs)
             s.soTimeout = readTimeoutMs
             val out = s.getOutputStream()

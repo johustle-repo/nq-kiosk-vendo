@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -9,6 +11,8 @@ import '../theme.dart';
 import '../widgets.dart';
 import 'admin_ui.dart';
 import 'pin_dialog.dart';
+
+part 'wifi_page.dart';
 
 const provisioningCommand =
     'adb shell dpm set-device-owner online.ebnleadgen.vendokiosk/.kiosk.KioskDeviceAdminReceiver';
@@ -25,6 +29,7 @@ const _destinations = [
   _Destination('Overview', Icons.dashboard_outlined, Icons.dashboard),
   _Destination('Apps', Icons.apps_outlined, Icons.apps),
   _Destination('Coin box', Icons.memory_outlined, Icons.memory),
+  _Destination('Wi-Fi', Icons.wifi_outlined, Icons.wifi),
   _Destination('Cloud', Icons.cloud_outlined, Icons.cloud),
   _Destination('System', Icons.settings_outlined, Icons.settings),
 ];
@@ -54,7 +59,8 @@ class _AdminScreenState extends State<AdminScreen> {
     0 => _OverviewPage(controller: widget.controller),
     1 => _AppsPage(controller: widget.controller),
     2 => _CoinBoxPage(controller: widget.controller),
-    3 => _CloudPage(controller: widget.controller),
+    3 => _WifiPage(controller: widget.controller),
+    4 => _CloudPage(controller: widget.controller),
     _ => _SystemPage(controller: widget.controller, onLock: _lockAndClose),
   };
 
@@ -630,6 +636,157 @@ class ProvisioningHelpDialog extends StatelessWidget {
 
 // ======================================================================= Apps
 
+/// Google Play for the administrator: install a game or app, come back, then
+/// approve it below. Customers never get Play.
+/// Tablet-wide screen brightness. The slider applies as it moves, so the
+/// administrator sees the result; needs Device Owner.
+class _BrightnessSection extends StatefulWidget {
+  const _BrightnessSection({required this.state, required this.bridge});
+
+  final KioskState state;
+  final KioskBridge bridge;
+
+  @override
+  State<_BrightnessSection> createState() => _BrightnessSectionState();
+}
+
+class _BrightnessSectionState extends State<_BrightnessSection> {
+  double? _dragging; // percent while the slider is held
+  DateTime _lastSent = DateTime.fromMillisecondsSinceEpoch(0);
+
+  void _preview(double v) {
+    setState(() => _dragging = v);
+    // Live preview, at most ~10 updates a second.
+    final now = DateTime.now();
+    if (now.difference(_lastSent).inMilliseconds < 100) return;
+    _lastSent = now;
+    widget.bridge.setBrightness(v.round(), auto: false).catchError((_) {});
+  }
+
+  Future<void> _commit(double v) async {
+    await adminRun(
+      context,
+      () => widget.bridge.setBrightness(v.round(), auto: false),
+    );
+    if (mounted) setState(() => _dragging = null);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.state;
+    final owner = s.deviceOwner;
+    final value = (_dragging ?? s.brightnessPct.toDouble()).clamp(1.0, 100.0);
+    return AdminSection(
+      icon: Icons.brightness_6_outlined,
+      title: 'Screen brightness',
+      trailing: StatusBadge(
+        s.brightnessAuto ? 'AUTO' : '${value.round()}%',
+        color: KioskPalette.ok,
+      ),
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.brightness_low, color: KioskPalette.textMuted),
+            Expanded(
+              child: Slider(
+                key: const Key('brightness'),
+                value: value,
+                min: 1,
+                max: 100,
+                divisions: 99,
+                label: '${value.round()}%',
+                onChanged: owner && !s.brightnessAuto ? _preview : null,
+                onChangeEnd: owner && !s.brightnessAuto ? _commit : null,
+              ),
+            ),
+            const Icon(Icons.brightness_high, color: KioskPalette.textMuted),
+          ],
+        ),
+        SwitchListTile(
+          key: const Key('brightness-auto'),
+          contentPadding: EdgeInsets.zero,
+          value: s.brightnessAuto,
+          title: const Text('Automatic brightness'),
+          subtitle: Text(
+            owner
+                ? 'Android adjusts the screen to the room light. Turn it off to set a fixed level. '
+                      'Applies to every app on the tablet; customers cannot change it.'
+                : 'Needs this app to be the device owner (production setup).',
+            style: const TextStyle(color: KioskPalette.textMuted),
+          ),
+          onChanged: owner
+              ? (v) => adminRun(
+                  context,
+                  () => widget.bridge.setBrightness(
+                    s.brightnessPct.clamp(1, 100),
+                    auto: v,
+                  ),
+                )
+              : null,
+        ),
+      ],
+    );
+  }
+}
+
+class _InstallAppsSection extends StatelessWidget {
+  const _InstallAppsSection({required this.controller, required this.onRefresh});
+
+  final KioskController controller;
+  final VoidCallback onRefresh;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = controller.state;
+    final b = controller.bridge;
+    final open = s.appStoreOpenS > 0;
+    final left = '${s.appStoreOpenS ~/ 60}:${(s.appStoreOpenS % 60).toString().padLeft(2, '0')}';
+    return AdminSection(
+      icon: Icons.shop_outlined,
+      title: 'Install apps from Google Play',
+      trailing: open
+          ? StatusBadge('OPEN · $left', color: KioskPalette.ok)
+          : null,
+      description:
+          'Opens Google Play for you for 15 minutes (or until you lock admin). Install the app, press '
+          'Home to come back, tap Refresh list, then select it below and Save.',
+      children: [
+        ActionButtons(
+          children: [
+            FilledButton.icon(
+              key: const Key('open-play'),
+              icon: const Icon(Icons.shop),
+              label: Text(open ? 'Go to Google Play' : 'Open Google Play'),
+              onPressed: () => adminRun(context, b.openAppStore),
+            ),
+            if (open)
+              OutlinedButton.icon(
+                key: const Key('close-play'),
+                icon: const Icon(Icons.close),
+                label: const Text('Close Google Play'),
+                onPressed: () => adminRun(context, b.closeAppStore),
+              ),
+            OutlinedButton.icon(
+              key: const Key('refresh-apps'),
+              icon: const Icon(Icons.refresh),
+              label: const Text('Refresh list'),
+              onPressed: onRefresh,
+            ),
+          ],
+        ),
+        if (!s.allowAccounts) ...[
+          const SizedBox(height: 10),
+          const AdminNote(
+            'Account sign-in is turned off (System page). Google Play needs a Google account on the '
+            'tablet; turn sign-in on to add one.',
+            color: KioskPalette.warn,
+          ),
+        ],
+      ],
+    );
+  }
+}
+
 class _AppsPage extends StatefulWidget {
   const _AppsPage({required this.controller});
 
@@ -686,6 +843,14 @@ class _AppsPageState extends State<_AppsPage> {
                             ),
                           ),
                           const SizedBox(height: 16),
+                          _InstallAppsSection(
+                            controller: widget.controller,
+                            onRefresh: () => setState(
+                              () => _apps = widget.controller.bridge.listApps(
+                                onlyAllowed: false,
+                              ),
+                            ),
+                          ),
                           TextField(
                             decoration: const InputDecoration(
                               prefixIcon: Icon(Icons.search),
@@ -896,6 +1061,44 @@ class _CoinBoxPageState extends State<_CoinBoxPage> {
   late int _station = widget.controller.state.controllerStation;
   bool _busy = false;
 
+  /// Tablets the chosen coin box serves (from its reply); 4 until known.
+  int _maxStations = 4;
+  List<CoinBoxInfo>? _found;
+  bool _finding = false;
+  CoinBoxTest? _test;
+  bool _testing = false;
+
+  Future<void> _find() async {
+    setState(() => _finding = true);
+    await adminRun(context, () async {
+      final found = await widget.controller.bridge.findCoinBoxes();
+      if (!mounted) return;
+      setState(() => _found = found);
+      if (found.length == 1) _use(found.single);
+    });
+    if (mounted) setState(() => _finding = false);
+  }
+
+  void _use(CoinBoxInfo box) => setState(() {
+    _address.text = box.host;
+    _maxStations = box.stations;
+    // A kiosk's own coin box (one tablet) knows its tablet as Tablet 1.
+    if (_station > box.stations) _station = 1;
+  });
+
+  Future<void> _testNow() async {
+    setState(() => _testing = true);
+    try {
+      final t = await widget.controller.bridge.testCoinBox(
+        _address.text.trim().isEmpty ? null : _address.text.trim(),
+      );
+      if (mounted) setState(() => _test = t);
+    } catch (e) {
+      if (mounted) showError(context, e);
+    }
+    if (mounted) setState(() => _testing = false);
+  }
+
   @override
   void dispose() {
     _address.dispose();
@@ -947,6 +1150,12 @@ class _CoinBoxPageState extends State<_CoinBoxPage> {
               s.accessSource == 'controller' ? formatHms(s.remainingMs) : '—',
             ),
             InfoRow(
+              'Free time from dashboard',
+              s.dashboardRemainingMs > 0
+                  ? formatHms(s.dashboardRemainingMs)
+                  : null,
+            ),
+            InfoRow(
               'Rate',
               '${s.secondsPerPulse} s per peso (${Rates.describeDuration(s.secondsPerPulse)})',
             ),
@@ -970,6 +1179,26 @@ class _CoinBoxPageState extends State<_CoinBoxPage> {
                 'Restored a saved session after restarting',
                 last: true,
               ),
+            if (_test != null) ...[
+              const SizedBox(height: 8),
+              CoinBoxTestView(test: _test!),
+            ],
+            const SizedBox(height: 14),
+            ActionButtons(
+              children: [
+                OutlinedButton.icon(
+                  key: const Key('coinbox-test'),
+                  onPressed: _testing ? null : _testNow,
+                  icon: _testing
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.network_check),
+                  label: const Text('Test connection'),
+                ),
+              ],
+            ),
           ],
         ),
         AdminSection(
@@ -978,16 +1207,73 @@ class _CoinBoxPageState extends State<_CoinBoxPage> {
               ? 'Re-pair or change address'
               : 'Pair this tablet',
           description:
-              'Tablet and coin box must be on the same Wi-Fi. One coin box serves up to 4 tablets: give each '
-              'tablet its own number. Hold the coin box FLASH button for 3 seconds to show a 6-digit code '
-              '(valid 2 minutes), then enter it here. Pairing replaces any tablet with the same number.',
+              'Tablet and coin box must be on the same Wi-Fi. With its own coin box, pair as Tablet 1. A coin '
+              'box shared by up to 4 tablets needs each tablet\'s own number. Get a 6-digit code from the coin box hotspot (Pair tablet tab) or by '
+              'holding its FLASH button for 3 seconds (valid 2 minutes), then enter it here. Pairing replaces '
+              'any tablet with the same number.',
           children: [
+            ActionButtons(
+              children: [
+                OutlinedButton.icon(
+                  key: const Key('coinbox-find'),
+                  onPressed: _finding ? null : _find,
+                  icon: _finding
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.search),
+                  label: Text(
+                    _finding ? 'Searching this Wi-Fi…' : 'Find coin box',
+                  ),
+                ),
+              ],
+            ),
+            if (_found != null) ...[
+              const SizedBox(height: 8),
+              if (_found!.isEmpty)
+                const AdminNote(
+                  'No coin box found on this Wi-Fi. Check that the coin box is powered and on the same '
+                  'network (Wi-Fi page), then search again.',
+                  color: KioskPalette.warn,
+                ),
+              for (final box in _found!)
+                ListTile(
+                  key: Key('found-${box.deviceId}'),
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    Icons.memory,
+                    color: box.host == _address.text.trim()
+                        ? KioskPalette.accent
+                        : KioskPalette.textMuted,
+                  ),
+                  title: Text('${box.deviceId} · ${box.host}'),
+                  subtitle: Text(
+                    [
+                      'firmware ${box.fwVersion}',
+                      box.stations == 1
+                          ? 'one tablet'
+                          : '${box.stations} tablets',
+                      if (box.mine) 'paired with this tablet',
+                      if (box.pairingOpen == true) 'pairing open',
+                    ].join(' · '),
+                  ),
+                  onTap: () => _use(box),
+                ),
+              const SizedBox(height: 8),
+            ],
+            const SizedBox(height: 8),
             DropdownButtonFormField<int>(
-              key: const Key('pair-station'),
-              initialValue: _station,
-              decoration: const InputDecoration(labelText: 'Tablet number'),
+              key: ValueKey('pair-station-$_maxStations-$_station'),
+              initialValue: _station.clamp(1, _maxStations),
+              decoration: InputDecoration(
+                labelText: 'Tablet number',
+                helperText: _maxStations == 1
+                    ? 'This coin box serves one tablet: Tablet 1'
+                    : null,
+              ),
               items: [
-                for (var n = 1; n <= 4; n++)
+                for (var n = 1; n <= _maxStations; n++)
                   DropdownMenuItem(value: n, child: Text('Tablet $n')),
               ],
               onChanged: (v) => setState(() => _station = v ?? 1),
@@ -1574,6 +1860,25 @@ class _SystemPageState extends State<_SystemPage> {
                 style: TextStyle(color: KioskPalette.textMuted),
               ),
               onChanged: (v) => adminRun(context, () => b.setAllowAccounts(v)),
+            ),
+          ],
+        ),
+        _BrightnessSection(state: s, bridge: b),
+        AdminSection(
+          icon: Icons.volume_up_outlined,
+          title: 'Sounds',
+          children: [
+            SwitchListTile(
+              key: const Key('sounds'),
+              contentPadding: EdgeInsets.zero,
+              value: s.sounds,
+              title: const Text('Coin chime and time warnings'),
+              subtitle: const Text(
+                'A chime when a coin adds time, a beep at 5 minutes left, three beeps at 1 minute and a '
+                'tone when time is up. Follows the tablet\'s notification volume.',
+                style: TextStyle(color: KioskPalette.textMuted),
+              ),
+              onChanged: (v) => adminRun(context, () => b.setSounds(v)),
             ),
           ],
         ),

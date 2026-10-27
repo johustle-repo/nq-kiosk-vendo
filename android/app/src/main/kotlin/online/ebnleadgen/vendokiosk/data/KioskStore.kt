@@ -140,6 +140,11 @@ class KioskStore(context: Context) {
         set(v) = prefs.edit().putBoolean("keep_wireless_adb", v).apply()
 
     /** Ad-blocking Private DNS in production (KioskPolicy.applyAdBlock). */
+    /** Coin chime and low-time beeps for the customer. */
+    var sounds: Boolean
+        get() = prefs.getBoolean("sounds", true)
+        set(v) = prefs.edit().putBoolean("sounds", v).apply()
+
     var blockAds: Boolean
         get() = prefs.getBoolean("block_ads", true)
         set(v) = prefs.edit().putBoolean("block_ads", v).apply()
@@ -161,6 +166,16 @@ class KioskStore(context: Context) {
     var chargeRequested: Boolean
         get() = prefs.getBoolean("charge_requested", false)
         set(v) = prefs.edit().putBoolean("charge_requested", v).apply()
+
+    // ---- free time from the dashboard (DashboardCredit), saved so an app restart keeps it
+    var dashboardCreditMs: Long
+        get() = prefs.getLong("dashboard_credit_ms", 0)
+        set(v) = prefs.edit().putLong("dashboard_credit_ms", v).apply()
+
+    /** Dashboard command ids already carried out (newest last), so a re-sent command is not applied twice. */
+    var dashboardCommandIds: List<Long>
+        get() = prefs.getString("dashboard_command_ids", "")!!.split(",").mapNotNull { it.toLongOrNull() }
+        set(v) = prefs.edit().putString("dashboard_command_ids", v.takeLast(50).joinToString(",")).commit().let { }
 
     // ---- secrets (Keystore-encrypted)
     private fun putSecret(name: String, value: ByteArray?) {

@@ -239,6 +239,19 @@ class PreviewKioskBridge implements KioskBridge {
   Future<void> setBlockAds(bool enabled) async => _unsupported();
 
   @override
+  Future<void> setSounds(bool enabled) async => _unsupported();
+
+  @override
+  Future<void> setBrightness(int percent, {required bool auto}) async =>
+      _unsupported();
+
+  @override
+  Future<void> openAppStore() async => _unsupported();
+
+  @override
+  Future<void> closeAppStore() async => _unsupported();
+
+  @override
   Future<void> setKeepWirelessAdb(bool enabled) async => _unsupported();
 
   @override
@@ -253,6 +266,26 @@ class PreviewKioskBridge implements KioskBridge {
 
   @override
   Future<void> openLockScreenSettings() async => _unsupported();
+
+  @override
+  Future<WifiStatus> wifiStatus() async => const WifiStatus();
+
+  @override
+  Future<List<WifiNetwork>> wifiScan() async => _unsupported();
+
+  @override
+  Future<void> wifiConnect(String ssid, String password, String security) async =>
+      _unsupported();
+
+  @override
+  Future<void> wifiSetEnabled(bool enabled) async => _unsupported();
+
+  @override
+  Future<CoinBoxTest> testCoinBox([String? address]) async =>
+      const CoinBoxTest(ok: false, error: 'preview_only');
+
+  @override
+  Future<List<CoinBoxInfo>> findCoinBoxes() async => _unsupported();
 
   void dispose() {
     _ticker.cancel();

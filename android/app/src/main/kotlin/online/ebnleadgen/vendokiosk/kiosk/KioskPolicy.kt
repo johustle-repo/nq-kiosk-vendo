@@ -79,6 +79,8 @@ class KioskPolicy(private val context: Context) {
     }
 
     fun isDeviceOwner(): Boolean = dpm.isDeviceOwnerApp(pkg)
+
+    fun isPackageInstalled(name: String) = isInstalled(name)
     fun isAdminActive(): Boolean = dpm.isAdminActive(admin)
     fun isLockTaskPermitted(): Boolean = dpm.isLockTaskPermitted(pkg)
 
@@ -171,12 +173,16 @@ class KioskPolicy(private val context: Context) {
      * Revoking removes customer apps from the lock task allowlist; Android then
      * finishes their tasks and returns to the kiosk task. That is the
      * enforcement at expiry — it works even while a customer app is in front.
+     *
+     * [adminApps] are let in for an unlocked administrator only (Google Play to
+     * install apps); they bypass [RestrictedApps] and are never customer apps.
      */
-    fun setPaidAccess(packages: List<String>?): Boolean {
+    fun setPaidAccess(packages: List<String>?, adminApps: List<String> = emptyList()): Boolean {
         if (!isDeviceOwner()) return false
         val allowed = buildList {
             add(pkg)
             packages?.let(RestrictedApps::filter)?.filter { it != pkg && isInstalled(it) }?.let { addAll(it) }
+            addAll(adminApps.filter { it != pkg && isInstalled(it) })
             // The Recents button and the gesture-navigation Home swipe are served by
             // the system launcher's recents activity even though this app is Home.
             // Without it on the allowlist both land on "App is not available".
@@ -372,6 +378,33 @@ class KioskPolicy(private val context: Context) {
             Log.w(KioskDeviceAdminReceiver.TAG, "lockNow failed", e)
             false
         }
+    }
+
+    /**
+     * Screen brightness for the whole tablet (every app), as a percentage, or
+     * Android's automatic brightness. Device Owner sets it without the "modify
+     * system settings" permission; false when not Device Owner or refused.
+     */
+    fun setBrightness(percent: Int, auto: Boolean): Boolean {
+        if (!isDeviceOwner()) return false
+        return try {
+            val level = (percent.coerceIn(1, 100) * 255 + 50) / 100
+            dpm.setSystemSetting(admin, Settings.System.SCREEN_BRIGHTNESS_MODE,
+                if (auto) Settings.System.SCREEN_BRIGHTNESS_MODE_AUTOMATIC.toString() else Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL.toString())
+            if (!auto) dpm.setSystemSetting(admin, Settings.System.SCREEN_BRIGHTNESS, level.coerceIn(1, 255).toString())
+            true
+        } catch (e: Exception) {
+            Log.w(KioskDeviceAdminReceiver.TAG, "Brightness not applied: $e")
+            false
+        }
+    }
+
+    /** Current brightness percentage (1-100) and whether automatic brightness is on. */
+    fun brightness(): Pair<Int, Boolean> {
+        val cr = context.contentResolver
+        val level = Settings.System.getInt(cr, Settings.System.SCREEN_BRIGHTNESS, 128)
+        val auto = Settings.System.getInt(cr, Settings.System.SCREEN_BRIGHTNESS_MODE, 0) == Settings.System.SCREEN_BRIGHTNESS_MODE_AUTOMATIC
+        return ((level * 100 + 127) / 255).coerceIn(1, 100) to auto
     }
 
     fun adBlockActive(): Boolean =

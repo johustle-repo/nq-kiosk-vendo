@@ -3,6 +3,7 @@ package online.ebnleadgen.vendokiosk.service
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.ConnectivityManager
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
@@ -18,9 +19,12 @@ import online.ebnleadgen.vendokiosk.core.AccessInputs
 import online.ebnleadgen.vendokiosk.core.AccessPolicy
 import online.ebnleadgen.vendokiosk.core.ChargeRule
 import online.ebnleadgen.vendokiosk.core.RestrictedApps
+import online.ebnleadgen.vendokiosk.core.ControllerDiscovery
+import online.ebnleadgen.vendokiosk.core.SoundCues
 import online.ebnleadgen.vendokiosk.core.ControllerProtocol
 import online.ebnleadgen.vendokiosk.core.ControllerProtocol.toHex
 import online.ebnleadgen.vendokiosk.core.ControllerStatus
+import online.ebnleadgen.vendokiosk.core.DashboardCredit
 import online.ebnleadgen.vendokiosk.core.DemoClock
 import online.ebnleadgen.vendokiosk.core.DenyReason
 import online.ebnleadgen.vendokiosk.core.KioskMode
@@ -37,6 +41,7 @@ import online.ebnleadgen.vendokiosk.kiosk.WatchdogReceiver
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.ConnectException
+import java.net.Inet4Address
 import java.net.SocketTimeoutException
 import java.security.SecureRandom
 import java.util.concurrent.CopyOnWriteArrayList
@@ -63,6 +68,13 @@ class KioskEngine private constructor(context: Context) {
         private const val CHARGE_RESEND_MS = 10 * 60_000L
         private const val ADMIN_UNLOCK_MS = 5 * 60_000L
         private const val RELOCK_INTERVAL_MS = 3_000L
+        // Coin box unreachable this long → look for it on the local network (its IP may have changed).
+        private const val DISCOVER_AFTER_MS = 15_000L
+        private const val DISCOVER_INTERVAL_MS = 60_000L
+        // Google Play for the administrator (install apps), then it is locked out again.
+        private const val APP_STORE_WINDOW_MS = 15 * 60_000L
+        private const val PLAY_STORE = "com.android.vending"
+        private const val PLAY_SERVICES = "com.google.android.gms" // Play sign-in and purchase screens
 
         @Volatile private var instance: KioskEngine? = null
 
@@ -75,8 +87,14 @@ class KioskEngine private constructor(context: Context) {
     val policy = KioskPolicy(ctx)
     private val tracker = SessionTracker(store.lossTimeoutS * 1000L)
     private val demo = DemoClock()
-    private val http = LocalHttp()
+    // Free time given from the dashboard; worker thread only.
+    private val dashboard = DashboardCredit(store.dashboardCreditMs)
+    private val dashboardAcks = LinkedHashMap<Long, String>() // applied, not yet confirmed by a heartbeat
+    val wifi = WifiAdmin(ctx)
+    // Coin box traffic always goes over the Wi-Fi, even when Android prefers mobile data.
+    private val http = LocalHttp(newSocket = { wifi.newLocalSocket() })
     private val cloud = CloudClient(BuildConfig.CLOUD_API_BASE)
+    private val sounds = SoundPlayer()
     private val random = SecureRandom()
     private val phoneBootId = ByteArray(4).also { random.nextBytes(it) }.toHex()
 
@@ -92,6 +110,8 @@ class KioskEngine private constructor(context: Context) {
     private val adBlockExecutor = Executors.newSingleThreadExecutor()
     private val adbRestartExecutor = Executors.newSingleThreadExecutor()
     private val adBlockInFlight = AtomicBoolean(false)
+    private val discoveryExecutor = Executors.newSingleThreadExecutor()
+    private val discoveryInFlight = AtomicBoolean(false)
 
     private val listeners = CopyOnWriteArrayList<(Map<String, Any?>) -> Unit>()
 
@@ -103,6 +123,8 @@ class KioskEngine private constructor(context: Context) {
     private var lastExpiryAtMs: Long? = null
     private var lastExpiryReason: String? = null
     private var lastPollAtMs = 0L
+    private var pollFailingSinceMs = 0L
+    private var lastDiscoveryAtMs = -DISCOVER_INTERVAL_MS
     private var lastCloudAtMs = -CLOUD_INTERVAL_MS
     private var lastWatchdogAtMs = 0L
     private var lastEmitAtMs = 0L
@@ -122,6 +144,8 @@ class KioskEngine private constructor(context: Context) {
     // ---- secrets cached in memory (never logged)
     @Volatile private var controllerKey: ByteArray? = store.controllerKey
     @Volatile private var adminUnlockedUntilMs = 0L
+    @Volatile private var appStoreUntilMs = 0L
+    private var appliedAppStore = false
 
     // ---- charger relay on the coin box (written by the charge executor)
     @Volatile private var chargeConfirmed: Boolean? = null // what the coin box last accepted
@@ -230,6 +254,13 @@ class KioskEngine private constructor(context: Context) {
             Log.w(TAG, "Self-heal: not in lock task; bringing the kiosk back")
             bringKioskToFront()
         }
+        if (appStoreUntilMs != 0L && t >= appStoreUntilMs) {
+            Log.i(TAG, "Google Play window ended")
+            appStoreUntilMs = 0L
+            evaluate()
+            if (store.mode == KioskMode.PRODUCTION) bringKioskToFront()
+            emit()
+        }
         if (t - lastEmitAtMs >= 1_000) emit()
     }
 
@@ -248,7 +279,7 @@ class KioskEngine private constructor(context: Context) {
     private fun evaluate() {
         val t = now()
         val mode = store.mode
-        val inputs = AccessInputs(
+        val base = AccessInputs(
             mode = mode,
             isDeviceOwner = isDeviceOwner(),
             controllerPaired = controllerKey != null && store.controllerAddress != null,
@@ -256,9 +287,16 @@ class KioskEngine private constructor(context: Context) {
             controllerRemainingMs = tracker.estimatedRemainingMs(t),
             demoRemainingMs = demo.remainingMs(t),
         )
+        // Dashboard time is used only while there is no paid coin time to use.
+        val usable = mode == KioskMode.DEMO || (mode == KioskMode.PRODUCTION && base.isDeviceOwner)
+        dashboard.setRunning(usable && AccessPolicy.controllerMs(base) == 0L, t)
+        val inputs = base.copy(dashboardRemainingMs = dashboard.remainingMs(t))
         val prev = decision
         val next = AccessPolicy.decide(inputs)
         decision = next
+        if (store.sounds && mode != KioskMode.UNCONFIGURED) {
+            SoundCues.cueFor(remainingOf(prev), remainingOf(next))?.let(sounds::play)
+        }
         if (prev.granted && !next.granted) {
             lastExpiryAtMs = t
             lastExpiryReason = (next as AccessDecision.Denied).reason.wire
@@ -274,13 +312,17 @@ class KioskEngine private constructor(context: Context) {
         if (mode == KioskMode.PRODUCTION) enforce(next.granted)
     }
 
+    private fun remainingOf(d: AccessDecision) = (d as? AccessDecision.Granted)?.remainingMs ?: 0L
+
     /** Applies the decision to Device Owner policy only when it changes. */
     private fun enforce(granted: Boolean) {
         val packages = if (granted) store.allowedPackages else emptyList()
-        if (appliedGrant == granted && appliedPackages == packages) return
-        val ok = policy.setPaidAccess(if (granted) packages else null)
+        val appStore = appStoreOpen()
+        if (appliedGrant == granted && appliedPackages == packages && appliedAppStore == appStore) return
+        val ok = policy.setPaidAccess(if (granted) packages else null, if (appStore) listOf(PLAY_STORE, PLAY_SERVICES) else emptyList())
         appliedGrant = if (ok) granted else null
         appliedPackages = packages
+        appliedAppStore = appStore
         if (granted) acquireWakeLock() else releaseWakeLock()
     }
 
@@ -348,6 +390,7 @@ class KioskEngine private constructor(context: Context) {
     private fun onPollResult(result: Result<ControllerStatus>) {
         result.fold(
             onSuccess = { status ->
+                pollFailingSinceMs = 0L
                 val update = tracker.onVerifiedStatus(status, now())
                 if (update.name != "UPDATED" && update.name != "STALE_IGNORED") Log.i(TAG, "Controller: $update")
             },
@@ -360,9 +403,47 @@ class KioskEngine private constructor(context: Context) {
                         else -> e.javaClass.simpleName
                     }
                 )
+                if (pollFailingSinceMs == 0L) pollFailingSinceMs = now()
+                maybeDiscoverController()
             }
         )
         evaluate()
+    }
+
+    /** The coin box stopped answering: its IP may have changed, so look for it by its device id. */
+    private fun maybeDiscoverController() {
+        val deviceId = store.controllerDeviceId ?: return
+        val t = now()
+        if (t - pollFailingSinceMs < DISCOVER_AFTER_MS || t - lastDiscoveryAtMs < DISCOVER_INTERVAL_MS) return
+        val ownIp = ownLocalIp() ?: return
+        if (!discoveryInFlight.compareAndSet(false, true)) return
+        lastDiscoveryAtMs = t
+        val previous = store.controllerAddress
+        discoveryExecutor.execute {
+            val found = try {
+                ControllerDiscovery.find(ownIp, previous, deviceId) { wifi.newLocalSocket() }
+            } catch (e: Exception) {
+                null
+            } finally {
+                discoveryInFlight.set(false)
+            }
+            handler.post {
+                if (found != null && found != store.controllerAddress && store.controllerDeviceId == deviceId) {
+                    Log.i(TAG, "Coin box found at a new address: $found (was $previous)")
+                    store.controllerAddress = found
+                    pollFailingSinceMs = 0L
+                    emit()
+                }
+            }
+        }
+    }
+
+    private fun ownLocalIp(): String? = wifi.ownIp() ?: try {
+        val cm = ctx.getSystemService(ConnectivityManager::class.java)
+        cm.getLinkProperties(cm.activeNetwork)?.linkAddresses
+            ?.map { it.address }?.firstOrNull { it is Inet4Address && it.isSiteLocalAddress }?.hostAddress
+    } catch (e: Exception) {
+        null
     }
 
     // ================================================================ cloud heartbeat (independent of local access)
@@ -385,6 +466,9 @@ class KioskEngine private constructor(context: Context) {
                 // One-shot request from a signed-in dashboard administrator (audited there).
                 if (res.optJSONObject("admin_unlock") != null) handler.post { remoteAdminUnlock() }
                 if (res.optBoolean("tap_admin", false)) handler.post { enableTapAdmin() }
+                val sentAcks = payload.optJSONArray("acks")
+                val commands = res.optJSONArray("commands")
+                handler.post { onDashboardCommands(sentAcks, commands) }
             } catch (e: CloudHttpException) {
                 cloudLink = if (e.status == 401) "unauthorized" else "error"
                 cloudLastError = e.code
@@ -398,10 +482,63 @@ class KioskEngine private constructor(context: Context) {
         }
     }
 
+    /**
+     * Commands from the dashboard (add_time, end_session) carried in the
+     * heartbeat reply. Each is applied once by id and acknowledged on the next
+     * heartbeat; the dashboard re-sends it until then.
+     */
+    private fun onDashboardCommands(sentAcks: JSONArray?, commands: JSONArray?) {
+        if (sentAcks != null) for (i in 0 until sentAcks.length()) dashboardAcks.remove(sentAcks.getJSONObject(i).optLong("id"))
+        if (commands == null || commands.length() == 0) return
+        val t = now()
+        val done = store.dashboardCommandIds.toMutableList()
+        for (i in 0 until commands.length()) {
+            val c = commands.optJSONObject(i) ?: continue
+            val id = c.optLong("id", 0)
+            if (id <= 0) continue
+            if (id in done) {
+                dashboardAcks.putIfAbsent(id, "ok")
+                continue
+            }
+            val result = when (c.optString("type")) {
+                "add_time" -> try {
+                    dashboard.add(c.optInt("seconds", 0), t)
+                    Log.i(TAG, "Dashboard added ${c.optInt("seconds")} s")
+                    "ok"
+                } catch (e: IllegalArgumentException) {
+                    "bad_seconds"
+                }
+                "end_session" -> {
+                    dashboard.clear()
+                    demo.clear()
+                    Log.i(TAG, "Dashboard ended the session")
+                    "ok"
+                }
+                else -> "unsupported"
+            }
+            done += id
+            dashboardAcks[id] = result
+        }
+        store.dashboardCommandIds = done
+        store.dashboardCreditMs = dashboard.remainingMs(t)
+        evaluate()
+        emit()
+        // Acknowledge now rather than in 30 s, so the dashboard shows it quickly.
+        lastCloudAtMs = 0
+    }
+
     private fun heartbeatPayload(): JSONObject {
         val t = now()
         val s = tracker.last
+        store.dashboardCreditMs = dashboard.remainingMs(t)
         return JSONObject()
+            .put("features", JSONArray(listOf("dashboard_time")))
+            .put(
+                "dashboard_time", JSONObject()
+                    .put("remaining_s", dashboard.remainingMs(t) / 1000)
+                    .put("running", dashboard.running)
+            )
+            .put("acks", JSONArray(dashboardAcks.map { (id, r) -> JSONObject().put("id", id).put("result", r) }))
             .put("boot_id", phoneBootId)
             .put("uptime_ms", t)
             .put("app_version", BuildConfig.VERSION_NAME)
@@ -533,6 +670,11 @@ class KioskEngine private constructor(context: Context) {
         }
     }
 
+    fun setSounds(enabled: Boolean) {
+        store.sounds = enabled
+        handler.post { emit() }
+    }
+
     fun setBlockAds(enabled: Boolean) {
         store.blockAds = enabled
         handler.post {
@@ -651,6 +793,10 @@ class KioskEngine private constructor(context: Context) {
                 "idleSleepS" to store.idleSleepS,
                 "screenOffS" to store.screenOffS,
                 "blockAds" to store.blockAds,
+                "sounds" to store.sounds,
+                "brightnessPct" to policy.brightness().first,
+                "brightnessAuto" to policy.brightness().second,
+                "appStoreOpenS" to (if (appStoreOpen()) (appStoreUntilMs - now()) / 1000 else 0L),
                 "keepWirelessAdb" to store.keepWirelessAdb,
                 "tapAdmin" to store.tapAdminEnabled,
                 "allowAccounts" to store.allowAccounts,
@@ -676,6 +822,7 @@ class KioskEngine private constructor(context: Context) {
                 "lockoutMs" to lockout.remainingLockMs(t),
             ),
             "demoRemainingMs" to demo.remainingMs(t),
+            "dashboardRemainingMs" to dashboard.remainingMs(t),
         )
     }
 
@@ -711,7 +858,55 @@ class KioskEngine private constructor(context: Context) {
         emit()
     }
 
+    private fun appStoreOpen() = appStoreUntilMs != 0L && now() < appStoreUntilMs
+
+    /**
+     * Opens Google Play for the administrator to install apps. In production it
+     * is let into the kiosk lock for [APP_STORE_WINDOW_MS] (or until admin is
+     * locked); customers can never get it (RestrictedApps). New apps still need
+     * to be approved on the Apps page.
+     */
+    fun openAppStore() {
+        requireAdmin()
+        if (!policy.isPackageInstalled(PLAY_STORE)) throw ProtocolException("play_store_missing", "Google Play is not installed")
+        appStoreUntilMs = now() + APP_STORE_WINDOW_MS
+        // Admin stays unlocked while away in Play, so returning lands on the admin screen.
+        adminUnlockedUntilMs = maxOf(adminUnlockedUntilMs, appStoreUntilMs)
+        handler.post {
+            evaluate() // production: adds Play to the lock task allowlist first
+            try {
+                val launch = ctx.packageManager.getLaunchIntentForPackage(PLAY_STORE)
+                    ?: Intent(Intent.ACTION_VIEW, android.net.Uri.parse("market://search?q=")).setPackage(PLAY_STORE)
+                ctx.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                Log.i(TAG, "Google Play opened for the administrator")
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not open Google Play: $e")
+            }
+            emit()
+        }
+    }
+
+    /** Tablet-wide screen brightness (percentage) or automatic brightness. Needs Device Owner. */
+    fun setBrightness(percent: Int, auto: Boolean) {
+        requireAdmin()
+        if (percent !in 1..100) throw ProtocolException("bad_brightness", "Brightness must be 1-100%")
+        if (!policy.setBrightness(percent, auto)) throw ProtocolException("not_device_owner", "Brightness needs Device Owner")
+        handler.post { emit() }
+    }
+
+    /** Ends the Google Play window and returns to the kiosk. */
+    fun closeAppStore() {
+        if (appStoreUntilMs == 0L) return
+        appStoreUntilMs = 0L
+        handler.post {
+            evaluate()
+            if (store.mode == KioskMode.PRODUCTION) bringKioskToFront()
+            emit()
+        }
+    }
+
     fun lockAdmin() {
+        closeAppStore()
         adminUnlockedUntilMs = 0
         // Locking admin also turns the dashboard-enabled 10-tap gesture off again.
         store.tapAdminEnabled = false
@@ -868,11 +1063,79 @@ class KioskEngine private constructor(context: Context) {
     }
 
     /** Blocking (call off the main thread). */
+    /**
+     * Reaches the coin box at [address] over the Wi-Fi: how long it took and
+     * what it reported, or why it failed. Never throws.
+     */
+    fun testCoinBox(address: String?): Map<String, Any?> {
+        val target = address?.takeIf { it.isNotBlank() } ?: store.controllerAddress
+        val parsed = target?.let { LocalHttp.parseLocalAddress(it) }
+        val ownIp = ownLocalIp()
+        val base = mapOf(
+            "address" to parsed?.let { "${it.first}:${it.second}" },
+            "ownIp" to ownIp,
+            "sameNetwork" to (parsed != null && ownIp != null && parsed.first.substringBeforeLast('.') == ownIp.substringBeforeLast('.')),
+            "viaWifi" to (wifi.wifiNetwork() != null),
+        )
+        if (parsed == null) return base + mapOf("ok" to false, "error" to "bad_address")
+        val started = System.nanoTime()
+        return try {
+            val r = pairingHttp.get("${parsed.first}:${parsed.second}", "/api/v1/info")
+            val ms = (System.nanoTime() - started) / 1_000_000
+            val info = ControllerDiscovery.parseInfo("${parsed.first}:${parsed.second}", r.body)
+            if (r.status != 200 || info == null) {
+                base + mapOf("ok" to false, "ms" to ms, "error" to "not_a_coin_box")
+            } else {
+                base + mapOf(
+                    "ok" to true, "ms" to ms, "deviceId" to info.deviceId, "fwVersion" to info.fwVersion,
+                    "stations" to info.stations, "paired" to info.paired, "pairingOpen" to info.pairingOpen,
+                )
+            }
+        } catch (e: Exception) {
+            base + mapOf("ok" to false, "ms" to (System.nanoTime() - started) / 1_000_000, "error" to networkError(e))
+        }
+    }
+
+    /** Every coin box on this tablet's Wi-Fi (blocking, up to ~10 s). */
+    fun findCoinBoxes(): List<Map<String, Any?>> {
+        val ownIp = ownLocalIp() ?: throw ProtocolException("no_wifi", "The tablet is not on a Wi-Fi network")
+        return ControllerDiscovery.scanAll(ownIp) { wifi.newLocalSocket() }.map {
+            mapOf(
+                "address" to it.address, "deviceId" to it.deviceId, "fwVersion" to it.fwVersion,
+                "stations" to it.stations, "paired" to it.paired, "pairingOpen" to it.pairingOpen,
+                "mine" to (it.deviceId == store.controllerDeviceId),
+            )
+        }
+    }
+
+    private fun networkError(e: Exception): String = when (e) {
+        is SocketTimeoutException -> "timeout"
+        is ConnectException -> "unreachable"
+        is ProtocolException -> e.code
+        else -> e.javaClass.simpleName
+    }
+
+    // Pairing and tests wait longer than the 1 s poll: a coin box that is busy with
+    // its cloud connection can take a few seconds to answer.
+    private val pairingHttp = LocalHttp(connectTimeoutMs = 4000, readTimeoutMs = 6000, newSocket = { wifi.newLocalSocket() })
+
     fun pairController(address: String, code: String, station: Int): Result<String> = try {
         if (!ControllerProtocol.isValidStation(station)) throw IllegalArgumentException("bad_station")
         val parsed = LocalHttp.parseLocalAddress(address) ?: throw IllegalArgumentException("bad_address")
         val normalized = "${parsed.first}:${parsed.second}"
-        val r = http.postForm(
+        // Reach the box first (two tries): a wrong address or Wi-Fi then fails here
+        // without using up one of the box's 5 code attempts.
+        val info = (1..2).firstNotNullOfOrNull { attempt ->
+            try {
+                pairingHttp.get(normalized, "/api/v1/info").let { ControllerDiscovery.parseInfo(normalized, it.body) }
+            } catch (e: Exception) {
+                if (attempt == 2) throw e
+                null
+            }
+        } ?: throw ProtocolException("not_a_coin_box", "No coin box answers at $normalized")
+        if (station > info.stations) throw ProtocolException("bad_station", "This coin box serves ${info.stations} tablet(s)")
+        if (info.pairingOpen == false) throw ProtocolException("pairing_closed", "Pairing is not open on the coin box")
+        val r = pairingHttp.postForm(
             normalized, "/api/v1/pair",
             mapOf("code" to code.trim(), "phone_id" to store.phoneId, "station" to station.toString())
         )
@@ -944,8 +1207,17 @@ class KioskEngine private constructor(context: Context) {
         Regex("\"ttl_s\":(\\d+)").find(body)?.groupValues?.get(1)?.toIntOrNull() ?: 0
     }.also { if (it.isSuccess) handler.post { lastPollAtMs = now(); schedulePoll() } }
 
-    /** Blocking. Ends the current paid session on the controller (admin action). */
-    fun endSession(): Result<Unit> = sendCommand("end_session").also { handler.post { demo.clear(); evaluate(); emit() } }
+    /** Blocking. Ends the current session: dashboard time here, paid time on the controller (admin action). */
+    fun endSession(): Result<Unit> {
+        handler.post {
+            dashboard.clear()
+            store.dashboardCreditMs = 0
+            demo.clear()
+            evaluate()
+            emit()
+        }
+        return if (controllerKey != null && store.controllerAddress != null) sendCommand("end_session") else Result.success(Unit)
+    }
 
     /** Blocking. Best-effort unpair on the controller, then forget the key locally. */
     fun unpairController(): Result<Unit> {

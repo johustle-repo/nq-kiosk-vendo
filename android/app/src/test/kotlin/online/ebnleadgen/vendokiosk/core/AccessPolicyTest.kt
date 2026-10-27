@@ -13,7 +13,8 @@ class AccessPolicyTest {
         link: LinkState = LinkState.CONNECTED,
         ctl: Long = 60_000,
         demo: Long = 0,
-    ) = AccessInputs(mode, owner, paired, link, ctl, demo)
+        dash: Long = 0,
+    ) = AccessInputs(mode, owner, paired, link, ctl, demo, dash)
 
     private fun reason(d: AccessDecision) = (d as AccessDecision.Denied).reason
 
@@ -74,6 +75,31 @@ class AccessPolicyTest {
     fun `demo ignores controller time when link is lost`() {
         val d = AccessPolicy.decide(inputs(mode = KioskMode.DEMO, link = LinkState.LOST, ctl = 60_000, demo = 0))
         assertFalse(d.granted)
+    }
+
+    @Test
+    fun `production grants dashboard time without a coin box`() {
+        val d = AccessPolicy.decide(inputs(paired = false, link = LinkState.NEVER, ctl = 0, dash = 300_000))
+        assertEquals("dashboard", (d as AccessDecision.Granted).source)
+        assertEquals(300_000, d.remainingMs)
+    }
+
+    @Test
+    fun `production adds dashboard time to verified coin time`() {
+        val d = AccessPolicy.decide(inputs(ctl = 60_000, dash = 300_000)) as AccessDecision.Granted
+        assertEquals(360_000, d.remainingMs)
+        assertEquals("controller", d.source)
+    }
+
+    @Test
+    fun `dashboard time still needs Device Owner in production`() {
+        assertEquals(DenyReason.NOT_DEVICE_OWNER, reason(AccessPolicy.decide(inputs(owner = false, dash = 300_000))))
+    }
+
+    @Test
+    fun `lost coin box keeps dashboard time only`() {
+        val d = AccessPolicy.decide(inputs(link = LinkState.LOST, ctl = 600_000, dash = 120_000)) as AccessDecision.Granted
+        assertEquals(120_000, d.remainingMs)
     }
 }
 

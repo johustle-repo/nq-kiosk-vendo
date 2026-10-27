@@ -62,10 +62,12 @@ Contact: [jonathanquiles59@gmail.com](mailto:jonathanquiles59@gmail.com)
 > `/api/kiosk-status.php` (see docs/WEB_KIOSK.md); it cannot enforce anything.
 > Desktop builds run an in-memory preview. The kiosk itself is the Android APK.
 
-### 2. Build the coin box
-Wire it as in `docs/ESP8266_FIRMWARE.md`, flash the firmware, connect it to
-Wi-Fi through its setup access point, and pair each tablet with its own
-tablet number (hold FLASH 3 s for the pairing code; tablet: Admin → Coin box).
+### 2. Build the coin boxes
+Each tablet has its own ESP8266 coin box. Wire it as in `docs/ESP8266_FIRMWARE.md`,
+flash the firmware, connect it to Wi-Fi through its admin hotspot
+(`http://192.168.4.1`), and pair its tablet as Tablet 1 (hotspot Pair tablet tab
+for the code; tablet: Admin → Coin box). On the dashboard, enroll the box with
+the same tablet number as its tablet.
 
 ### 3. Production kiosk
 Provision the phone as Device Owner (`docs/DEVICE_OWNER_PROVISIONING.md`),

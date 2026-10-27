@@ -159,6 +159,8 @@ class MainActivity : FlutterActivity() {
                 handle(call, result)
             } catch (e: CodedException) {
                 result.error(e.code, e.message, null)
+            } catch (e: online.ebnleadgen.vendokiosk.core.ProtocolException) {
+                result.error(e.code, e.message, null)
             } catch (e: SecurityException) {
                 result.error(e.message ?: "forbidden", "Administrator PIN required", null)
             } catch (e: IllegalArgumentException) {
@@ -180,6 +182,7 @@ class MainActivity : FlutterActivity() {
                     onFailure = { e ->
                         val code = when (e) {
                             is CodedException -> e.code
+                            is online.ebnleadgen.vendokiosk.service.WifiAdmin.CodedError -> e.code
                             is SecurityException -> e.message ?: "forbidden"
                             is IllegalArgumentException -> "invalid_argument"
                             else -> "error"
@@ -304,6 +307,36 @@ class MainActivity : FlutterActivity() {
                 val station = call.argument<Int>("station") ?: 1
                 background(result) { engine.pairController(address, code, station).orThrowCode() }
             }
+            // Administrator Wi-Fi page and coin box diagnostics.
+            "wifiStatus" -> {
+                engine.requireAdmin()
+                background(result) { engine.wifi.status() }
+            }
+            "wifiScan" -> {
+                engine.requireAdmin()
+                background(result) { engine.wifi.scan() }
+            }
+            "wifiConnect" -> {
+                engine.requireAdmin()
+                val ssid = call.argument<String>("ssid") ?: ""
+                val password = call.argument<String>("password") ?: ""
+                val security = call.argument<String>("security") ?: "wpa2"
+                background(result) { engine.wifi.connect(ssid, password, security); true }
+            }
+            "wifiSetEnabled" -> {
+                engine.requireAdmin()
+                val on = call.argument<Boolean>("enabled") ?: true
+                background(result) { engine.wifi.setEnabled(on); true }
+            }
+            "testCoinBox" -> {
+                engine.requireAdmin()
+                val address = call.argument<String>("address")
+                background(result) { engine.testCoinBox(address) }
+            }
+            "findCoinBoxes" -> {
+                engine.requireAdmin()
+                background(result) { engine.findCoinBoxes() }
+            }
             "setControllerAddress" -> {
                 engine.requireAdmin()
                 engine.setControllerAddress(call.argument<String>("address") ?: "").orThrowCode()
@@ -398,6 +431,24 @@ class MainActivity : FlutterActivity() {
             "setKeepWirelessAdb" -> {
                 engine.requireAdmin()
                 engine.setKeepWirelessAdb(call.argument<Boolean>("enabled") ?: true)
+                result.success(true)
+            }
+            "openAppStore" -> {
+                engine.openAppStore()
+                result.success(true)
+            }
+            "closeAppStore" -> {
+                engine.requireAdmin()
+                engine.closeAppStore()
+                result.success(true)
+            }
+            "setBrightness" -> {
+                engine.setBrightness(call.argument<Int>("percent") ?: 0, call.argument<Boolean>("auto") ?: false)
+                result.success(true)
+            }
+            "setSounds" -> {
+                engine.requireAdmin()
+                engine.setSounds(call.argument<Boolean>("enabled") ?: true)
                 result.success(true)
             }
             "setBlockAds" -> {

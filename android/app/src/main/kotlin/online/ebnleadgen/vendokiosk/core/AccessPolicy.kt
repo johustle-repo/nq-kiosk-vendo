@@ -30,35 +30,51 @@ data class AccessInputs(
     val link: LinkState,
     val controllerRemainingMs: Long,
     val demoRemainingMs: Long,
+    val dashboardRemainingMs: Long = 0,
 )
 
 /**
  * Single place that decides whether customer apps may be used.
  *
- * Production: only fresh, verified controller time counts. No Device Owner,
- * no paired controller, or a lost local link (older than the configured
- * timeout) all deny access. Simulated credit is ignored and there is no
+ * Production: fresh, verified controller time, plus free time given from the
+ * dashboard (authenticated heartbeat). No Device Owner denies everything; with
+ * no dashboard time, no paired controller or a lost local link (older than the
+ * configured timeout) deny access. Simulated credit is ignored and there is no
  * fallback to demo behaviour.
  *
- * Demo: simulated credit plus (if paired) controller time; nothing is enforced.
+ * Demo: simulated credit plus dashboard and (if paired) controller time;
+ * nothing is enforced.
  */
 object AccessPolicy {
     fun decide(i: AccessInputs): AccessDecision = when (i.mode) {
         KioskMode.UNCONFIGURED -> AccessDecision.Denied(DenyReason.UNCONFIGURED)
-        KioskMode.PRODUCTION -> when {
-            !i.isDeviceOwner -> AccessDecision.Denied(DenyReason.NOT_DEVICE_OWNER)
-            !i.controllerPaired -> AccessDecision.Denied(DenyReason.NOT_PAIRED)
-            i.link == LinkState.NEVER || i.link == LinkState.LOST -> AccessDecision.Denied(DenyReason.CONTROLLER_LOST)
-            i.controllerRemainingMs <= 0 -> AccessDecision.Denied(DenyReason.NO_TIME)
-            else -> AccessDecision.Granted(i.controllerRemainingMs, "controller")
+        KioskMode.PRODUCTION -> {
+            val ctl = controllerMs(i)
+            val dash = i.dashboardRemainingMs
+            when {
+                !i.isDeviceOwner -> AccessDecision.Denied(DenyReason.NOT_DEVICE_OWNER)
+                ctl > 0 -> AccessDecision.Granted(ctl + dash, "controller")
+                dash > 0 -> AccessDecision.Granted(dash, "dashboard")
+                !i.controllerPaired -> AccessDecision.Denied(DenyReason.NOT_PAIRED)
+                i.link == LinkState.NEVER || i.link == LinkState.LOST -> AccessDecision.Denied(DenyReason.CONTROLLER_LOST)
+                else -> AccessDecision.Denied(DenyReason.NO_TIME)
+            }
         }
         KioskMode.DEMO -> {
-            val ctl = if (i.controllerPaired && i.link != LinkState.LOST && i.link != LinkState.NEVER) i.controllerRemainingMs else 0
-            val total = ctl + i.demoRemainingMs
-            if (total > 0) AccessDecision.Granted(total, if (ctl > 0) "controller" else "simulated")
-            else AccessDecision.Denied(DenyReason.NO_TIME)
+            val ctl = controllerMs(i)
+            val total = ctl + i.dashboardRemainingMs + i.demoRemainingMs
+            val source = when {
+                ctl > 0 -> "controller"
+                i.dashboardRemainingMs > 0 -> "dashboard"
+                else -> "simulated"
+            }
+            if (total > 0) AccessDecision.Granted(total, source) else AccessDecision.Denied(DenyReason.NO_TIME)
         }
     }
+
+    /** Controller time that counts: paired and reported within the loss timeout. */
+    fun controllerMs(i: AccessInputs): Long =
+        if (i.controllerPaired && i.link != LinkState.LOST && i.link != LinkState.NEVER) i.controllerRemainingMs.coerceAtLeast(0) else 0
 }
 
 /**

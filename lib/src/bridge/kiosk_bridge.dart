@@ -37,6 +37,159 @@ class PinResult {
   final String? recoveryCode;
 }
 
+/// The tablet's Wi-Fi connection, for the administrator Wi-Fi page.
+class WifiStatus {
+  const WifiStatus({
+    this.enabled = false,
+    this.connected = false,
+    this.ssid,
+    this.locationReady = false,
+    this.ip,
+    this.gateway,
+    this.rssi,
+    this.linkMbps,
+    this.frequencyMhz,
+    this.internet = false,
+    this.defaultIsWifi = false,
+    this.deviceOwner = false,
+  });
+
+  final bool enabled;
+  final bool connected;
+
+  /// Null when not connected, or when Android hides the name (location off).
+  final String? ssid;
+  final bool locationReady;
+  final String? ip;
+  final String? gateway;
+  final int? rssi;
+  final int? linkMbps;
+  final int? frequencyMhz;
+  final bool internet;
+
+  /// False while Android sends traffic over mobile data (Wi-Fi has no internet).
+  final bool defaultIsWifi;
+  final bool deviceOwner;
+
+  factory WifiStatus.fromMap(Map<Object?, Object?> m) => WifiStatus(
+    enabled: m['enabled'] == true,
+    connected: m['connected'] == true,
+    ssid: m['ssid'] as String?,
+    locationReady: m['locationReady'] == true,
+    ip: m['ip'] as String?,
+    gateway: m['gateway'] as String?,
+    rssi: m['rssi'] as int?,
+    linkMbps: m['linkMbps'] as int?,
+    frequencyMhz: m['frequencyMhz'] as int?,
+    internet: m['internet'] == true,
+    defaultIsWifi: m['defaultIsWifi'] == true,
+    deviceOwner: m['deviceOwner'] == true,
+  );
+}
+
+/// A Wi-Fi network in range.
+class WifiNetwork {
+  const WifiNetwork({
+    required this.ssid,
+    required this.rssi,
+    this.frequencyMhz = 0,
+    this.security = 'wpa2',
+    this.connected = false,
+  });
+
+  final String ssid;
+  final int rssi;
+  final int frequencyMhz;
+
+  /// open, wpa2, wpa3, wep or enterprise.
+  final String security;
+  final bool connected;
+
+  bool get secured => security != 'open';
+
+  factory WifiNetwork.fromMap(Map<Object?, Object?> m) => WifiNetwork(
+    ssid: m['ssid'] as String,
+    rssi: (m['rssi'] as int?) ?? -100,
+    frequencyMhz: (m['frequencyMhz'] as int?) ?? 0,
+    security: (m['security'] as String?) ?? 'wpa2',
+    connected: m['connected'] == true,
+  );
+}
+
+/// A coin box that answered on the Wi-Fi (connection test or search).
+class CoinBoxInfo {
+  const CoinBoxInfo({
+    required this.address,
+    required this.deviceId,
+    this.fwVersion = '',
+    this.stations = 1,
+    this.paired = const [],
+    this.pairingOpen,
+    this.mine = false,
+  });
+
+  final String address;
+  final String deviceId;
+  final String fwVersion;
+
+  /// How many tablets the box serves (1 = this kiosk's own coin box).
+  final int stations;
+  final List<bool> paired;
+  final bool? pairingOpen;
+
+  /// The coin box this tablet is paired with.
+  final bool mine;
+
+  /// Address without the default port, for the address field.
+  String get host => address.endsWith(':80')
+      ? address.substring(0, address.length - 3)
+      : address;
+
+  factory CoinBoxInfo.fromMap(Map<Object?, Object?> m) => CoinBoxInfo(
+    address: m['address'] as String,
+    deviceId: m['deviceId'] as String,
+    fwVersion: (m['fwVersion'] as String?) ?? '',
+    stations: (m['stations'] as int?) ?? 1,
+    paired: [for (final p in (m['paired'] as List?) ?? const []) p == true],
+    pairingOpen: m['pairingOpen'] as bool?,
+    mine: m['mine'] == true,
+  );
+}
+
+/// Result of reaching the coin box from this tablet.
+class CoinBoxTest {
+  const CoinBoxTest({
+    required this.ok,
+    this.address,
+    this.ms,
+    this.error,
+    this.ownIp,
+    this.sameNetwork = false,
+    this.viaWifi = false,
+    this.box,
+  });
+
+  final bool ok;
+  final String? address;
+  final int? ms;
+  final String? error;
+  final String? ownIp;
+  final bool sameNetwork;
+  final bool viaWifi;
+  final CoinBoxInfo? box;
+
+  factory CoinBoxTest.fromMap(Map<Object?, Object?> m) => CoinBoxTest(
+    ok: m['ok'] == true,
+    address: m['address'] as String?,
+    ms: m['ms'] as int?,
+    error: m['error'] as String?,
+    ownIp: m['ownIp'] as String?,
+    sameNetwork: m['sameNetwork'] == true,
+    viaWifi: m['viaWifi'] == true,
+    box: m['ok'] == true ? CoinBoxInfo.fromMap(m) : null,
+  );
+}
+
 /// Error raised by the native side, with a machine-readable [code].
 class KioskException implements Exception {
   KioskException(this.code, [this.message]);
@@ -107,6 +260,16 @@ abstract class KioskBridge {
   /// Ad-blocking Private DNS in production.
   Future<void> setBlockAds(bool enabled);
 
+  /// Coin chime and low-time beeps for the customer.
+  Future<void> setSounds(bool enabled);
+
+  /// Tablet-wide screen brightness (1-100 %) or automatic brightness.
+  Future<void> setBrightness(int percent, {required bool auto});
+
+  /// Google Play for the administrator (15 minutes or until admin is locked).
+  Future<void> openAppStore();
+  Future<void> closeAppStore();
+
   /// Turn wireless debugging back on whenever Android switches it off.
   Future<void> setKeepWirelessAdb(bool enabled);
 
@@ -121,6 +284,18 @@ abstract class KioskBridge {
   });
 
   Future<void> openLockScreenSettings();
+
+  /// Wi-Fi page (administrator, Device Owner): the kiosk hides Settings.
+  Future<WifiStatus> wifiStatus();
+  Future<List<WifiNetwork>> wifiScan();
+  Future<void> wifiConnect(String ssid, String password, String security);
+  Future<void> wifiSetEnabled(bool enabled);
+
+  /// Reaches the coin box at [address] (default: the paired one) over the Wi-Fi.
+  Future<CoinBoxTest> testCoinBox([String? address]);
+
+  /// Every coin box on this tablet's Wi-Fi (takes up to ~10 s).
+  Future<List<CoinBoxInfo>> findCoinBoxes();
 }
 
 class MethodChannelKioskBridge implements KioskBridge {
@@ -307,6 +482,20 @@ class MethodChannelKioskBridge implements KioskBridge {
       _call('setBlockAds', {'enabled': enabled});
 
   @override
+  Future<void> setSounds(bool enabled) =>
+      _call('setSounds', {'enabled': enabled});
+
+  @override
+  Future<void> setBrightness(int percent, {required bool auto}) =>
+      _call('setBrightness', {'percent': percent, 'auto': auto});
+
+  @override
+  Future<void> openAppStore() => _call('openAppStore');
+
+  @override
+  Future<void> closeAppStore() => _call('closeAppStore');
+
+  @override
   Future<void> setKeepWirelessAdb(bool enabled) =>
       _call('setKeepWirelessAdb', {'enabled': enabled});
 
@@ -327,4 +516,42 @@ class MethodChannelKioskBridge implements KioskBridge {
 
   @override
   Future<void> openLockScreenSettings() => _call('openLockScreenSettings');
+
+  @override
+  Future<WifiStatus> wifiStatus() async => WifiStatus.fromMap(
+    (await _call<Map<Object?, Object?>>('wifiStatus')) ?? const {},
+  );
+
+  @override
+  Future<List<WifiNetwork>> wifiScan() async => [
+    for (final m in (await _call<List<Object?>>('wifiScan')) ?? const [])
+      WifiNetwork.fromMap((m as Map).cast<Object?, Object?>()),
+  ];
+
+  @override
+  Future<void> wifiConnect(String ssid, String password, String security) =>
+      _call('wifiConnect', {
+        'ssid': ssid,
+        'password': password,
+        'security': security,
+      });
+
+  @override
+  Future<void> wifiSetEnabled(bool enabled) =>
+      _call('wifiSetEnabled', {'enabled': enabled});
+
+  @override
+  Future<CoinBoxTest> testCoinBox([String? address]) async =>
+      CoinBoxTest.fromMap(
+        (await _call<Map<Object?, Object?>>('testCoinBox', {
+              'address': address,
+            })) ??
+            const {},
+      );
+
+  @override
+  Future<List<CoinBoxInfo>> findCoinBoxes() async => [
+    for (final m in (await _call<List<Object?>>('findCoinBoxes')) ?? const [])
+      CoinBoxInfo.fromMap((m as Map).cast<Object?, Object?>()),
+  ];
 }
