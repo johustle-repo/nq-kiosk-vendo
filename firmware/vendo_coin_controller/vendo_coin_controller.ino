@@ -93,6 +93,9 @@ String bootId;    // random per boot: lets the tablets and cloud detect restarts
 String adminFormToken;           // random per boot, required by every settings form (CSRF)
 bool staPaused = false;          // shop Wi-Fi retries paused while the hotspot is in use
 uint64_t staDownSinceMs = 0;
+uint64_t staRejoinAtMs = 0;      // last fresh join attempt while the shop Wi-Fi is down
+uint64_t netQuietUntilMs = 0;    // internet down: cloud calls skipped until then
+uint8_t netFailures = 0;
 uint64_t hotspotRestartAtMs = 0; // apply a new hotspot password after the reply is sent
 uint64_t hotspotInfoUntilMs = 0; // FLASH held 10 s: hotspot name and password on the LCD
 
@@ -330,10 +333,18 @@ void loadSettings() {
 }
 
 // ============================================================ charger relay (D6)
+// Seconds left of a dashboard "Charge now" for tablet n (0 = none).
+uint32_t dashChargeS(uint8_t n) {
+  const uint64_t now = millis64();
+  const uint64_t until = stations[n].dashChargeUntilMs;
+  return until > now ? (uint32_t)((until - now + 999) / 1000) : 0;
+}
+
 bool chargeRelayOn() {
   if (relayOverride >= 0) return relayOverride == 1;
   for (uint8_t i = 1; i <= MAX_STATIONS; i++) {
     if (stations[i].chargeWanted && stations[i].pairKeyHex.length()) return true;
+    if (dashChargeS(i)) return true;
   }
   return false;
 }
@@ -550,6 +561,14 @@ void checkExpiry() {
     if (stations[i].running && now >= stations[i].endMs) endSession(i, EV_EXPIRE, 0);
   }
   if (selStation && now >= selUntilMs) selStation = 0;
+  for (uint8_t i = 1; i <= MAX_STATIONS; i++) {
+    if (stations[i].dashChargeUntilMs && now >= stations[i].dashChargeUntilMs) {
+      stations[i].dashChargeUntilMs = 0;
+      Serial.printf("[relay] tablet %u: dashboard charging ended\n", i);
+      applyChargeRelay();
+      reportSoon();
+    }
+  }
   if (anyRunning() && now - lastCheckpointMs >= CHECKPOINT_INTERVAL_S * 1000ULL) saveCheckpoint();
 }
 
@@ -729,7 +748,7 @@ void noteTlsResult(int code) {
     tlsFailures = 0;
     return;
   }
-  if (!tlsSmallBuffers || !WiFi.isConnected() || code == -101) return;
+  if (!tlsSmallBuffers || !WiFi.isConnected() || code == -101 || code == -102) return;
   if (++tlsFailures >= 4) {
     tlsSmallBuffers = false;
     netClient.setBufferSizes(16384, TLS_TX_BUFFER);
@@ -737,7 +756,26 @@ void noteTlsResult(int code) {
   }
 }
 
+// Internet unreachable: pause every cloud call (doubling, capped) so the local tablet API stays responsive.
+void noteNetResult(int code) {
+  if (code > 0) {
+    if (netFailures) Serial.println("[net] internet back");
+    netFailures = 0;
+    netQuietUntilMs = 0;
+    return;
+  }
+  if (code == -101 || code == -102) return;
+  const uint64_t pause = min<uint64_t>(NET_QUIET_MAX_MS, (uint64_t)NET_QUIET_BASE_MS << min<uint8_t>(netFailures, 3));
+  if (netFailures < 255) netFailures++;
+  netQuietUntilMs = millis64() + pause;
+  Serial.printf("[net] cloud unreachable, cloud calls paused %lu s (tablet unaffected)\n", (unsigned long)(pause / 1000));
+}
+
 int httpsPost(const String &url, const String &body, const String &bearer, String &response) {
+  if (millis64() < netQuietUntilMs) {
+    response = String();
+    return -102;  // internet down: skipped without blocking
+  }
   // A dead connection (e.g. after a Wi-Fi change) still holds its TLS buffers: release them first.
   if (!netClient.connected()) netClient.stop();
   if (ESP.getMaxFreeBlockSize() < TLS_MIN_FREE_BLOCK && !netClient.connected()) {
@@ -753,6 +791,7 @@ int httpsPost(const String &url, const String &body, const String &bearer, Strin
   response = code > 0 ? netHttp.getString() : String();  // read fully so the connection can be reused
   netHttp.end();  // keeps the socket open when the server allows keep-alive
   noteTlsResult(code);
+  noteNetResult(code);
   if (code < 0) {
     char err[80];
     netClient.getLastSSLError(err, sizeof(err));
@@ -834,6 +873,7 @@ String buildSyncBody(uint8_t &countOut) {
   b += ",\"buffered_events\":" + String(evCount);
   b += ",\"dropped_events\":" + String(droppedEvents);
   b += ",\"held_pulses\":" + String(heldPulses);
+  b += ",\"charge_relay\":" + String(chargeRelayOn() ? "true" : "false");
   b += ",\"stations\":[";
   for (uint8_t i = 1; i <= MAX_STATIONS; i++) {
     const Station &s = stations[i];
@@ -843,6 +883,7 @@ String buildSyncBody(uint8_t &countOut) {
     b += ",\"remaining_s\":" + String(remainingSeconds(i));
     b += ",\"session_no\":" + String(s.sessionNo);
     b += ",\"paired\":" + String(s.pairKeyHex.length() ? "true" : "false");
+    b += ",\"dash_charge_s\":" + String(dashChargeS(i));
     b += ",\"phone_last_poll_age_s\":" + String(s.lastPhonePollMs ? (long)((millis64() - s.lastPhonePollMs) / 1000) : -1L) + "}";
   }
   b += "]},\"events\":[";
@@ -902,6 +943,8 @@ void cloudSync() {
     cloudState = CLOUD_OK;
     cloudFailures = 0;
     lastCloudOkMs = millis64();
+  } else if (code == -102) {
+    cloudState = CLOUD_ERROR;  // internet pause: no extra back-off, retried at the normal interval
   } else if (code == 401) {
     cloudState = CLOUD_UNAUTHORIZED;  // revoked: keep events, stop until re-enrolled
     Serial.println("[cloud] credential rejected (revoked?) — re-enroll via setup portal");
@@ -972,6 +1015,19 @@ void applyCommand(const String &obj) {
   } else if (type == "assign_held") {
     if (heldPulses) assignHeld(n, id);
     else result = "nothing_held";
+  } else if (type == "charge_on") {
+    // Dashboard "Charge now": relay on for `seconds`, whatever the tablet reports.
+    if (seconds >= 60 && seconds <= (long)MAX_DASH_CHARGE_S) {
+      stations[n].dashChargeUntilMs = millis64() + (uint64_t)seconds * 1000ULL;
+      applyChargeRelay();
+      reportSoon();
+    } else {
+      result = "bad_seconds";
+    }
+  } else if (type == "charge_off") {
+    stations[n].dashChargeUntilMs = 0;
+    applyChargeRelay();
+    reportSoon();
   } else {
     result = "unknown_type";
   }
@@ -998,6 +1054,7 @@ void controllerPoll() {
   b += "]}";
   String resp;
   const int code = httpsPost(settings.apiBase + "/controller/poll", b, settings.cloudToken, resp);
+  if (code == -102) return;  // internet pause: retried as soon as it ends
   if (code != 200) {
     pollState = code == 401 ? CLOUD_UNAUTHORIZED : CLOUD_ERROR;
     pollFailures++;
@@ -1613,6 +1670,12 @@ void wifiLoop() {
     Serial.printf("[wifi] %s unreachable; retries paused while someone uses the hotspot\n", settings.wifiSsid.c_str());
     WiFi.disconnect();
     staPaused = true;
+  } else if (!adminOnHotspot && now - staDownSinceMs >= STA_REJOIN_MS && now - staRejoinAtMs >= STA_REJOIN_MS) {
+    Serial.printf("[wifi] %s down %lu s: joining again\n", settings.wifiSsid.c_str(), (unsigned long)((now - staDownSinceMs) / 1000));
+    const uint64_t downSince = staDownSinceMs;
+    connectShopWifi();
+    staDownSinceMs = downSince;  // keep the outage start for the hotspot pause
+    staRejoinAtMs = now;
   }
 }
 
@@ -1746,6 +1809,7 @@ void logWifiChanges() {
   if (now == was) return;
   was = now;
   if (now) {
+    netQuietUntilMs = 0;  // try the cloud right away on the new connection
     Serial.printf("[wifi] connected to %s, IP %s (use this IP to pair the tablets)\n", WiFi.SSID().c_str(),
                   WiFi.localIP().toString().c_str());
   } else {
@@ -1808,6 +1872,7 @@ void serialConfigLoop() {
                       remainingSeconds(i) ? "running" : "idle", (unsigned long)remainingSeconds(i),
                       (unsigned long)stations[i].sessionNo, (unsigned long)stations[i].lastPulses,
                       stations[i].pairKeyHex.length() ? "yes" : "no", stations[i].chargeWanted ? ", wants charging" : "");
+        if (dashChargeS(i)) Serial.printf("[status] tablet %u: dashboard charging, %lu s left\n", i, (unsigned long)dashChargeS(i));
       }
       Serial.printf("[status] charger relay (D6) %s%s\n", chargeRelayOn() ? "ON" : "OFF",
                     relayOverride >= 0 ? " (serial test)" : "");

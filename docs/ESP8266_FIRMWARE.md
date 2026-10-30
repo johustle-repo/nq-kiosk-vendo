@@ -18,7 +18,7 @@ Prebuilt binaries (no secrets inside): `dist/firmware/*.bin`.
 | LCD SDA | GPIO4 | **D2** | I2C data |
 | LCD SCL | GPIO14 | **D5** | I2C clock |
 | Pair/setup button | GPIO0 | D3 (on-board FLASH) | press only after boot |
-| Charger relay IN | GPIO12 | **D6** | firmware 2.2.0+; active-LOW module by default (`CHARGE_RELAY_ACTIVE_LOW`) |
+| Charger relay IN | GPIO12 | **D6** | firmware 2.2.0+; active-HIGH module by default since 2.5.1 (`CHARGE_RELAY_ACTIVE_LOW 0`; set 1 for an active-LOW module) |
 | Status LED | GPIO2 | D4 (on-board blue LED) | firmware 2.4.0+; on while the box is not on the shop Wi-Fi |
 | GND | GND | G | **common ground for everything** |
 

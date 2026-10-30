@@ -3,7 +3,7 @@
 // are NOT here; they are set through the setup portal or the cloud dashboard.
 #pragma once
 
-#define FW_VERSION "2.4.0"
+#define FW_VERSION "2.5.2"
 // Local phone protocol 2: one coin box, up to MAX_STATIONS tablets, per-tablet keys.
 #define PROTOCOL_VERSION 2
 
@@ -20,6 +20,8 @@
 #define TABLET_CLAIM_TTL_S 60UL
 // Largest single free-time grant accepted from the dashboard.
 #define MAX_ADMIN_CREDIT_S (4UL * 3600UL)
+// Longest "Charge now" from the dashboard (it can also be stopped earlier).
+#define MAX_DASH_CHARGE_S (12UL * 3600UL)
 
 // ---------------------------------------------------------------- pins
 // NodeMCU / Wemos D1 mini labels in comments.
@@ -28,11 +30,12 @@
 #define LCD_SCL_PIN 14  // D5 / GPIO14
 #define BUTTON_PIN 0    // D3 / GPIO0  — on-board FLASH button (press only AFTER boot)
 // Charger relay: on while any tablet reports a low battery (the tablet asks
-// below its "start charging" level and releases it when charged).
+// below its "start charging" level and releases it when charged), or while a
+// dashboard "Charge now" runs (it works even when the tablet's battery is flat).
 #define CHARGE_RELAY_PIN 12  // D6 / GPIO12 — relay module IN
-// Most blue 1-channel relay modules switch on when IN is pulled LOW. Set 0 for
-// a module (or MOSFET board) that switches on when IN is HIGH.
-#define CHARGE_RELAY_ACTIVE_LOW 1
+// 0: the relay switches on when IN is HIGH (the shop's module, checked on the
+// box). Set 1 for a module that switches on when IN is pulled LOW.
+#define CHARGE_RELAY_ACTIVE_LOW 0
 // On-board blue LED (active LOW): on while the coin box is not on the shop
 // Wi-Fi, so a box without an LCD still shows that it needs setting up.
 #define STATUS_LED_PIN 2  // D4 / GPIO2
@@ -83,6 +86,11 @@
 #define CLOUD_BACKOFF_MAX_S 300UL
 // Short, because the tablets' local requests wait while a cloud call runs.
 #define HTTP_TIMEOUT_MS 5000
+// Internet down (Wi-Fi up): after a failed cloud call every cloud call is
+// skipped for a while, so the coin box keeps answering its tablet instead of
+// waiting on timeouts. The pause doubles per failure: 5, 10, 20, 30 s.
+#define NET_QUIET_BASE_MS 5000UL
+#define NET_QUIET_MAX_MS 30000UL
 // TLS receive buffer, with the max fragment length extension (saves
 // ~12 KB of heap per connection; a full 16 KB buffer ran the heap out).
 #define TLS_RX_BUFFER 4096
@@ -131,6 +139,9 @@
 // long, stop retrying it: the ESP8266's reconnect scans hop channels and make
 // the hotspot drop. Retrying resumes when the hotspot is empty or on save.
 #define STA_PAUSE_AFTER_MS 30000UL
+// Shop Wi-Fi still down this long: start a fresh join instead of waiting on the
+// SDK's auto-reconnect (which can stall after a router restart). Repeats.
+#define STA_REJOIN_MS 10000UL
 #define HOTSPOT_INFO_SHOW_MS 60000UL
 
 // ---------------------------------------------------------------- LCD

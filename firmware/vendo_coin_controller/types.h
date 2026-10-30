@@ -34,6 +34,7 @@ struct Station {
   uint32_t lastCmdCounter = 0;
   uint64_t lastPhonePollMs = 0;
   bool chargeWanted = false;  // tablet asked for the charger relay (battery low)
+  uint64_t dashChargeUntilMs = 0;  // dashboard "Charge now" runs until then (not saved: a restart ends it)
 };
 
 enum EventType : uint8_t {
