@@ -6,6 +6,10 @@ package online.ebnleadgen.vendokiosk.core
  * so one bad battery reading cannot switch it on), stops at [stopPct]. In
  * between it keeps charging only while the tablet is actually charging, so a
  * relay that is not wired (or a charger that is unplugged) is released.
+ *
+ * [manual] is the administrator's "Charge now": the relay stays on until the
+ * battery is full or the administrator stops it, whatever the automatic
+ * setting and levels say.
  */
 object ChargeRule {
     const val DEFAULT_START_PCT = 20
@@ -22,7 +26,9 @@ object ChargeRule {
         previous: Boolean,
         charging: Boolean,
         lowReadings: Int,
+        manual: Boolean = false,
     ): Boolean = when {
+        manual -> batteryPct < 100 // unknown level (-1) keeps charging
         !enabled -> false
         batteryPct !in 0..100 -> previous // level unknown: keep what the coin box has
         batteryPct >= stopPct -> false

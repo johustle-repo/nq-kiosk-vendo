@@ -510,6 +510,49 @@ class _OverviewPage extends StatelessWidget {
             ),
           ],
         ),
+        AdminSection(
+          icon: Icons.power_settings_new,
+          title: 'Power',
+          description:
+              'Shut down or restart this tablet. Android shows its power menu; tap Power off. '
+              'Customer time on the tablet is lost when it is switched off.',
+          children: [
+            ActionButtons(
+              children: [
+                OutlinedButton.icon(
+                  key: const Key('shut-down'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: KioskPalette.danger,
+                    side: const BorderSide(color: KioskPalette.danger),
+                  ),
+                  icon: const Icon(Icons.power_settings_new),
+                  label: const Text('Shut down'),
+                  onPressed: () => adminRun(context, () async {
+                    if (!await b.showPowerMenu() && context.mounted) {
+                      await showDialog<void>(
+                        context: context,
+                        builder: (c) => AlertDialog(
+                          backgroundColor: KioskPalette.surfaceHigh,
+                          title: const Text('Use the power button'),
+                          content: const Text(
+                            'Within the next minute, hold the tablet\'s power button '
+                            'for 2 seconds, then tap Power off.',
+                          ),
+                          actions: [
+                            FilledButton(
+                              onPressed: () => Navigator.pop(c),
+                              child: const Text('OK'),
+                            ),
+                          ],
+                        ),
+                      );
+                    }
+                  }),
+                ),
+              ],
+            ),
+          ],
+        ),
         if (s.deviceOwner)
           AdminSection(
             icon: Icons.warning_amber_rounded,
@@ -1494,8 +1537,38 @@ class _ChargeSection extends StatelessWidget {
           : null,
       description:
           'The coin box switches its D6 relay on when this tablet\'s battery drops below the start '
-          'level and off again when it reaches the stop level. Wire the tablet charger through the relay.',
+          'level and off again when it reaches the stop level. Wire the tablet charger through the relay. '
+          '"Charge now" switches it on straight away until the battery is full.',
       children: [
+        ActionButtons(
+          children: [
+            if (!s.chargeManual)
+              FilledButton.icon(
+                key: const Key('charge-now'),
+                icon: const Icon(Icons.power),
+                label: const Text('Charge now'),
+                onPressed: s.controllerPaired
+                    ? () => adminRun(
+                        context,
+                        () => b.setManualCharge(true),
+                        success: 'Charger relay on until the battery is full',
+                      )
+                    : null,
+              ),
+            if (s.chargeManual)
+              OutlinedButton.icon(
+                key: const Key('charge-stop-now'),
+                icon: const Icon(Icons.power_off),
+                label: const Text('Stop charging'),
+                onPressed: () => adminRun(
+                  context,
+                  () => b.setManualCharge(false),
+                  success: 'Charger relay off',
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
         SwitchListTile(
           key: const Key('auto-charge'),
           contentPadding: EdgeInsets.zero,
@@ -1559,7 +1632,7 @@ class _ChargeSection extends StatelessWidget {
         ),
         InfoRow(
           'Relay',
-          relay,
+          s.chargeManual && s.chargeRelayOn == true ? 'ON (charge now)' : relay,
           valueColor: s.chargeRelayOn == true ? KioskPalette.ok : null,
           last: err == null,
         ),

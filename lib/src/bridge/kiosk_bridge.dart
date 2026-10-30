@@ -283,6 +283,13 @@ abstract class KioskBridge {
     required int stopPct,
   });
 
+  /// "Charge now" (relay on until the battery is full) or "Stop charging".
+  Future<void> setManualCharge(bool on);
+
+  /// Opens Android's power menu (Power off / Restart). False when it could not
+  /// be opened: the power button shows it for the next minute instead.
+  Future<bool> showPowerMenu();
+
   Future<void> openLockScreenSettings();
 
   /// Wi-Fi page (administrator, Device Owner): the kiosk hides Settings.
@@ -513,6 +520,13 @@ class MethodChannelKioskBridge implements KioskBridge {
     'startPct': startPct,
     'stopPct': stopPct,
   });
+
+  @override
+  Future<void> setManualCharge(bool on) => _call('setManualCharge', {'on': on});
+
+  @override
+  Future<bool> showPowerMenu() async =>
+      (await _call<bool>('showPowerMenu')) ?? false;
 
   @override
   Future<void> openLockScreenSettings() => _call('openLockScreenSettings');

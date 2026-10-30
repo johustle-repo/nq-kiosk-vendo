@@ -465,6 +465,15 @@ class MainActivity : FlutterActivity() {
                 )
                 result.success(true)
             }
+            "setManualCharge" -> {
+                engine.requireAdmin()
+                engine.setManualCharge(call.argument<Boolean>("on") ?: false)
+                result.success(true)
+            }
+            "showPowerMenu" -> {
+                engine.requireAdmin()
+                result.success(engine.showPowerMenu())
+            }
             "openLockScreenSettings" -> {
                 engine.requireAdmin()
                 startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))

@@ -253,7 +253,84 @@ void main() {
       await tester.tap(find.byKey(const Key('auto-charge')));
       await tester.pumpAndSettle();
       expect(bridge.calls, contains('autoCharge:false:20:90'));
+      await tester.ensureVisible(find.byKey(const Key('charge-now')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('charge-now')));
+      await tester.pumpAndSettle();
+      expect(bridge.calls, contains('manualCharge:true'));
     });
+
+    testWidgets('stop charging while charge now is on', (tester) async {
+      final bridge = await pump(
+        tester,
+        const Size(1280, 800),
+        snapshot(
+          unlocked: true,
+          batteryPct: 60,
+          chargeRequested: true,
+          chargeRelayOn: true,
+          chargeManual: true,
+        ),
+      );
+      await openAdmin(tester);
+      await tester.tap(
+        find.descendant(
+          of: find.byType(NavigationRail),
+          matching: find.text('Coin box'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+        find.byKey(const Key('charge-stop-now')),
+        300,
+        scrollable: find
+            .ancestor(
+              of: find.text('Live status'),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
+      expect(find.byKey(const Key('charge-now')), findsNothing);
+      expect(find.text('ON (charge now)'), findsOneWidget);
+      await tester.ensureVisible(find.byKey(const Key('charge-stop-now')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('charge-stop-now')));
+      await tester.pumpAndSettle();
+      expect(bridge.calls, contains('manualCharge:false'));
+    });
+
+    for (final opens in [true, false]) {
+      testWidgets('shut down opens the power menu (opens: $opens)', (
+        tester,
+      ) async {
+        final bridge = await pump(
+          tester,
+          const Size(1280, 800),
+          snapshot(unlocked: true),
+        );
+        bridge.powerMenuOpens = opens;
+        await openAdmin(tester);
+        await tester.scrollUntilVisible(
+          find.byKey(const Key('shut-down')),
+          300,
+          scrollable: find
+              .ancestor(
+                of: find.text('Status of this kiosk at a glance.'),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+        );
+        await tester.ensureVisible(find.byKey(const Key('shut-down')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('shut-down')));
+        await tester.pumpAndSettle();
+        expect(bridge.calls, contains('powerMenu'));
+        expect(
+          find.text('Use the power button'),
+          opens ? findsNothing : findsOneWidget,
+        );
+      });
+    }
 
     testWidgets('Wi-Fi page shows the connection, tests the coin box and joins a network', (
       tester,

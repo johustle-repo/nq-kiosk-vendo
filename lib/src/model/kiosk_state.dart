@@ -64,6 +64,7 @@ class KioskState {
     this.batteryPct = -1,
     this.batteryCharging = false,
     this.chargeRequested = false,
+    this.chargeManual = false,
     this.chargeRelayOn,
     this.chargeLastError,
     this.screenLockSecure = false,
@@ -169,6 +170,9 @@ class KioskState {
 
   /// The tablet currently asks the coin box for the charger relay.
   final bool chargeRequested;
+
+  /// The administrator's "Charge now" is on (until the battery is full).
+  final bool chargeManual;
 
   /// Relay state reported by the coin box (null until it answered).
   final bool? chargeRelayOn;
@@ -296,6 +300,7 @@ class KioskState {
       batteryPct: _int(charge['batteryPct']) ?? -1,
       batteryCharging: charge['charging'] == true,
       chargeRequested: charge['requested'] == true,
+      chargeManual: charge['manual'] == true,
       chargeRelayOn: charge['relayOn'] as bool?,
       chargeLastError: charge['lastError'] as String?,
       screenLockSecure: settings['screenLockSecure'] == true,

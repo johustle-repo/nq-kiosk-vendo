@@ -36,11 +36,13 @@ data class AccessInputs(
 /**
  * Single place that decides whether customer apps may be used.
  *
- * Production: fresh, verified controller time, plus free time given from the
+ * Production: verified controller time, plus free time given from the
  * dashboard (authenticated heartbeat). No Device Owner denies everything; with
- * no dashboard time, no paired controller or a lost local link (older than the
- * configured timeout) deny access. Simulated credit is ignored and there is no
- * fallback to demo behaviour.
+ * no dashboard time, no paired controller or a coin box never heard from deny
+ * access. A paid session survives the coin box dropping off the network: the
+ * tablet keeps counting down the last verified report (it never adds time) and
+ * the next report replaces the estimate. Simulated credit is ignored and there
+ * is no fallback to demo behaviour.
  *
  * Demo: simulated credit plus dashboard and (if paired) controller time;
  * nothing is enforced.
@@ -72,9 +74,12 @@ object AccessPolicy {
         }
     }
 
-    /** Controller time that counts: paired and reported within the loss timeout. */
+    /**
+     * Controller time that counts: paired and verified at least once. A lost
+     * link keeps counting down so a Wi-Fi or internet drop does not interrupt play.
+     */
     fun controllerMs(i: AccessInputs): Long =
-        if (i.controllerPaired && i.link != LinkState.LOST && i.link != LinkState.NEVER) i.controllerRemainingMs.coerceAtLeast(0) else 0
+        if (i.controllerPaired && i.link != LinkState.NEVER) i.controllerRemainingMs.coerceAtLeast(0) else 0
 }
 
 /**

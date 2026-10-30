@@ -265,6 +265,12 @@ class PreviewKioskBridge implements KioskBridge {
   }) async => _unsupported();
 
   @override
+  Future<void> setManualCharge(bool on) async => _unsupported();
+
+  @override
+  Future<bool> showPowerMenu() async => _unsupported();
+
+  @override
   Future<void> openLockScreenSettings() async => _unsupported();
 
   @override

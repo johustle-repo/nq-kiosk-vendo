@@ -47,6 +47,14 @@ class ChargeRuleTest {
     }
 
     @Test
+    fun manualChargesUntilFullWhateverTheSettings() {
+        assertTrue(ChargeRule.wantsCharge(false, 95, 20, 90, false, false, 0, manual = true))
+        assertTrue(ChargeRule.wantsCharge(true, 50, 20, 90, false, false, 0, manual = true))
+        assertTrue(ChargeRule.wantsCharge(true, -1, 20, 90, false, false, 0, manual = true))
+        assertFalse(ChargeRule.wantsCharge(true, 100, 20, 90, true, true, 0, manual = true))
+    }
+
+    @Test
     fun unknownLevelKeepsTheLastDecision() {
         assertTrue(wants(-1, previous = true))
         assertFalse(wants(-1, previous = false))

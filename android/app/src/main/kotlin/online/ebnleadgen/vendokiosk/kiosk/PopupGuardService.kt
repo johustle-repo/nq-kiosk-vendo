@@ -14,6 +14,8 @@ import android.view.accessibility.AccessibilityEvent
  * shopping app. The block itself stays; only the box is dismissed (Back), so
  * the customer is returned to the game.
  *
+ * Also opens the power menu for the administrator's "Shut down" button.
+ *
  * Enabled by [KioskPolicy.applyBaseline] when the app holds
  * WRITE_SECURE_SETTINGS (granted once over adb at provisioning).
  */
@@ -26,9 +28,25 @@ class PopupGuardService : AccessibilityService() {
         performGlobalAction(GLOBAL_ACTION_BACK)
     }
 
+    override fun onServiceConnected() {
+        running = this
+    }
+
+    override fun onDestroy() {
+        if (running === this) running = null
+        super.onDestroy()
+    }
+
     override fun onInterrupt() = Unit
 
     companion object {
+        @Volatile private var running: PopupGuardService? = null
+
+        fun isRunning(): Boolean = running != null
+
+        /** Opens Android's power menu. False when the service is not running. */
+        fun showPowerMenu(): Boolean = running?.performGlobalAction(GLOBAL_ACTION_POWER_DIALOG) == true
+
         /**
          * The box arrives as the activity or, on many builds, as a plain
          * android.app.Dialog titled "App is not available" / "... is not

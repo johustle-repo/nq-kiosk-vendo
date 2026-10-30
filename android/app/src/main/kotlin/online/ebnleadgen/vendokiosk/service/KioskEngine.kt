@@ -37,6 +37,7 @@ import online.ebnleadgen.vendokiosk.core.SessionTracker
 import online.ebnleadgen.vendokiosk.data.KioskStore
 import online.ebnleadgen.vendokiosk.kiosk.KioskDeviceAdminReceiver
 import online.ebnleadgen.vendokiosk.kiosk.KioskPolicy
+import online.ebnleadgen.vendokiosk.kiosk.PopupGuardService
 import online.ebnleadgen.vendokiosk.kiosk.WatchdogReceiver
 import org.json.JSONArray
 import org.json.JSONObject
@@ -66,11 +67,12 @@ class KioskEngine private constructor(context: Context) {
         private const val AD_BLOCK_REFRESH_MS = 30 * 60_000L
         private const val AD_BLOCK_RETRY_MS = 60_000L
         private const val CHARGE_RESEND_MS = 10 * 60_000L
+        private const val POWER_MENU_MS = 60_000L
         private const val ADMIN_UNLOCK_MS = 5 * 60_000L
         private const val RELOCK_INTERVAL_MS = 3_000L
         // Coin box unreachable this long → look for it on the local network (its IP may have changed).
-        private const val DISCOVER_AFTER_MS = 15_000L
-        private const val DISCOVER_INTERVAL_MS = 60_000L
+        private const val DISCOVER_AFTER_MS = 10_000L
+        private const val DISCOVER_INTERVAL_MS = 20_000L
         // Google Play for the administrator (install apps), then it is locked out again.
         private const val APP_STORE_WINDOW_MS = 15 * 60_000L
         private const val PLAY_STORE = "com.android.vending"
@@ -605,9 +607,13 @@ class KioskEngine private constructor(context: Context) {
         val pct = batteryPct()
         val charging = isCharging()
         chargeLowReadings = if (pct in 0 until store.chargeStartPct) chargeLowReadings + 1 else 0
+        if (store.manualCharge && pct >= 100) {
+            store.manualCharge = false
+            Log.i(TAG, "Battery full: manual charging ended")
+        }
         val want = ChargeRule.wantsCharge(
             store.autoChargeEnabled, pct, store.chargeStartPct, store.chargeStopPct, store.chargeRequested,
-            charging, chargeLowReadings,
+            charging, chargeLowReadings, store.manualCharge,
         )
         if (want != store.chargeRequested) {
             store.chargeRequested = want
@@ -695,6 +701,43 @@ class KioskEngine private constructor(context: Context) {
             emit()
         }
     }
+
+    /**
+     * Administrator's "Charge now" / "Stop charging": switches the coin box relay
+     * on until the battery is full, or off now. Stopping hands control back to
+     * the automatic levels, which may switch it on again when the battery is low.
+     */
+    fun setManualCharge(on: Boolean) {
+        if (on && (controllerKey == null || store.controllerAddress == null)) {
+            throw ProtocolException("not_paired", "Pair the coin box first")
+        }
+        store.manualCharge = on
+        if (!on) store.chargeRequested = false
+        handler.post {
+            lastChargeCheckAtMs = now()
+            checkCharge()
+            emit()
+        }
+    }
+
+    /**
+     * Opens Android's power menu (Power off / Restart) for the administrator. No
+     * app may power the tablet off itself, so the menu does it. Lock task blocks
+     * the menu; it is allowed for [POWER_MENU_MS] and then blocked again. False
+     * when the popup guard (accessibility) is not running: the administrator
+     * then holds the power button within that time instead.
+     */
+    fun showPowerMenu(): Boolean {
+        policy.allowPowerMenu(true)
+        handler.removeCallbacks(blockPowerMenu)
+        handler.postDelayed(blockPowerMenu, POWER_MENU_MS)
+        if (!PopupGuardService.isRunning()) return false
+        // Give the system UI a moment to apply the new lock task features first.
+        handler.postDelayed({ PopupGuardService.showPowerMenu() }, 300)
+        return true
+    }
+
+    private val blockPowerMenu = Runnable { policy.allowPowerMenu(false) }
 
     /** Applies a newer cloud configuration version (allowed apps, loss timeout). */
     private fun applyCloudConfig(cfg: JSONObject) {
@@ -812,6 +855,7 @@ class KioskEngine private constructor(context: Context) {
                 "batteryPct" to batteryPct(),
                 "charging" to isCharging(),
                 "requested" to store.chargeRequested,
+                "manual" to store.manualCharge,
                 "relayOn" to chargeRelayOn,
                 "lastError" to chargeLastError,
             ),

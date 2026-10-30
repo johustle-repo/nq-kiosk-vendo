@@ -201,6 +201,17 @@ class FakeKioskBridge implements KioskBridge {
   }) async => calls.add('autoCharge:$enabled:$startPct:$stopPct');
 
   @override
+  Future<void> setManualCharge(bool on) async => calls.add('manualCharge:$on');
+
+  bool powerMenuOpens = true;
+
+  @override
+  Future<bool> showPowerMenu() async {
+    calls.add('powerMenu');
+    return powerMenuOpens;
+  }
+
+  @override
   Future<void> openLockScreenSettings() async =>
       calls.add('openLockScreenSettings');
 
@@ -268,6 +279,7 @@ Map<Object?, Object?> snapshot({
   int batteryPct = 50,
   bool chargeRequested = false,
   bool? chargeRelayOn,
+  bool chargeManual = false,
   int station = 1,
   int selectedStation = 0,
   int heldPulses = 0,
@@ -323,6 +335,7 @@ Map<Object?, Object?> snapshot({
     'batteryPct': batteryPct,
     'charging': chargeRelayOn == true,
     'requested': chargeRequested,
+    'manual': chargeManual,
     'relayOn': chargeRelayOn,
     'lastError': null,
   },

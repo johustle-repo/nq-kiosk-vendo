@@ -162,6 +162,11 @@ class KioskStore(context: Context) {
         get() = prefs.getInt("charge_stop_pct", ChargeRule.DEFAULT_STOP_PCT)
         set(v) = prefs.edit().putInt("charge_stop_pct", v).apply()
 
+    /** Administrator's "Charge now": relay on until full or stopped, see ChargeRule. */
+    var manualCharge: Boolean
+        get() = prefs.getBoolean("manual_charge", false)
+        set(v) = prefs.edit().putBoolean("manual_charge", v).apply()
+
     /** Last decision (kept across restarts so charging continues between the levels). */
     var chargeRequested: Boolean
         get() = prefs.getBoolean("charge_requested", false)

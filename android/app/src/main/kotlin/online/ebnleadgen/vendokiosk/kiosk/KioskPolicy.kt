@@ -206,8 +206,30 @@ class KioskPolicy(private val context: Context) {
         // Stop allowlisted apps from opening non-allowlisted activities (e.g. Settings
         // screens) inside their own task. Android 11+.
         if (Build.VERSION.SDK_INT >= 30) features = features or DevicePolicyManager.LOCK_TASK_FEATURE_BLOCK_ACTIVITY_START_IN_TASK
+        if (powerMenuAllowed) features = features or DevicePolicyManager.LOCK_TASK_FEATURE_GLOBAL_ACTIONS
         dpm.setLockTaskFeatures(admin, features)
         return true
+    }
+
+    /** Administrator asked for the power menu; kept by [setPaidAccess] while true. */
+    @Volatile private var powerMenuAllowed = false
+
+    /**
+     * Lets lock task show Android's power menu (Power off / Restart) or blocks it
+     * again. Customers never get it: it is on only for a minute after the
+     * administrator taps "Shut down".
+     */
+    fun allowPowerMenu(allow: Boolean) {
+        powerMenuAllowed = allow
+        if (!isDeviceOwner()) return
+        try {
+            val f = dpm.getLockTaskFeatures(admin)
+            val next = if (allow) f or DevicePolicyManager.LOCK_TASK_FEATURE_GLOBAL_ACTIONS
+            else f and DevicePolicyManager.LOCK_TASK_FEATURE_GLOBAL_ACTIONS.inv()
+            if (next != f) dpm.setLockTaskFeatures(admin, next)
+        } catch (e: Exception) {
+            Log.w(KioskDeviceAdminReceiver.TAG, "Power menu not ${if (allow) "allowed" else "blocked"}: $e")
+        }
     }
 
     /**
