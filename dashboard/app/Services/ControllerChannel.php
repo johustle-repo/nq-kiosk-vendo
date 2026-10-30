@@ -28,6 +28,10 @@ use InvalidArgumentException;
  * keeps that free time and uses it after any paid coin time, so it works with
  * no coin box paired. The tablet collects its commands on its heartbeat
  * (~30 s) and acknowledges them the same way.
+ *
+ * "Charge now" goes to the coin box (firmware 2.5.0+), which switches its
+ * charger relay on for a while, so it works even when the tablet's battery is
+ * flat. It ends by itself when the tablet reports a full battery.
  */
 class ControllerChannel
 {
@@ -193,14 +197,80 @@ class ControllerChannel
         return $this->queue($site, 'assign_held', $station, null, $by, $ip, $site->controllerForStation($station));
     }
 
+    /** Switches the charger relay of tablet N's coin box on (until stopped, the time limit or a full battery). */
+    public function chargeNow(Site $site, int $station, User $by, ?string $ip = null): ControllerCommand
+    {
+        self::assertStation($station);
+        $box = $site->controllerForStation($station);
+        if ($box === null) {
+            throw new InvalidArgumentException("Tablet {$station} has no coin box.");
+        }
+        if (! self::takesCharge($box)) {
+            throw new InvalidArgumentException('The coin box needs firmware '.config('vendo.charge_firmware').' or newer for Charge now.');
+        }
+
+        return $this->queue($site, 'charge_on', $station, (int) config('vendo.dashboard_charge_seconds'), $by, $ip, $box);
+    }
+
+    /** Ends a dashboard "Charge now" ($by null: the tablet reported a full battery). */
+    public function stopCharge(Site $site, int $station, ?User $by, ?string $ip = null): ControllerCommand
+    {
+        self::assertStation($station);
+        $box = $site->controllerForStation($station);
+        if ($box === null) {
+            throw new InvalidArgumentException("Tablet {$station} has no coin box.");
+        }
+
+        return $this->queue($site, 'charge_off', $station, null, $by, $ip, $box);
+    }
+
+    /** Stops a running or queued "Charge now" once the tablet reports 100 %. */
+    public function stopChargeWhenFull(Device $phone): void
+    {
+        $station = $phone->station_no;
+        if ($station === null || $phone->status('battery_pct') !== 100) {
+            return;
+        }
+        $site = $phone->site;
+        $box = $site->controllerForStation((int) $station);
+        if ($box === null) {
+            return;
+        }
+        $last = ControllerCommand::where('device_id', $box->id)->where('station_no', $station)
+            ->whereIn('type', ['charge_on', 'charge_off'])->latest('id')->first();
+        $charging = self::dashChargeSeconds($box, (int) $station) > 0;
+        if ($last?->type === 'charge_off' && ($last->applied_at === null || ! $charging)) {
+            return; // already stopping (or stopped)
+        }
+        if ($charging || ($last?->type === 'charge_on' && $last->applied_at === null)) {
+            $this->stopCharge($site, (int) $station, null);
+        }
+    }
+
+    /** Seconds left of a dashboard "Charge now" on tablet N, from the coin box's last report. */
+    public static function dashChargeSeconds(Device $box, int $station): int
+    {
+        $st = ($box->status('stations', []) ?? [])[$station] ?? null;
+        if (! is_array($st) || $box->status_reported_at === null) {
+            return 0;
+        }
+
+        return max(0, (int) ($st['dash_charge_s'] ?? 0) - (int) $box->status_reported_at->diffInSeconds(now()));
+    }
+
+    public static function takesCharge(Device $box): bool
+    {
+        return version_compare((string) ($box->sw_version ?? '0'), (string) config('vendo.charge_firmware'), '>=');
+    }
+
     /** @param  Device|null  $to  coin box or tablet that carries it out */
-    private function queue(Site $site, string $type, int $station, ?int $seconds, User $by, ?string $ip, ?Device $to): ControllerCommand
+    private function queue(Site $site, string $type, int $station, ?int $seconds, ?User $by, ?string $ip, ?Device $to): ControllerCommand
     {
         $cmd = ControllerCommand::create([
             'site_id' => $site->id, 'device_id' => $to?->id, 'type' => $type, 'station_no' => $station, 'seconds' => $seconds,
-            'created_by' => $by->id, 'created_at' => now(),
+            'created_by' => $by?->id, 'created_at' => now(),
         ]);
-        AuditLog::record('site.command.'.$type, $by->id, $site->id, null,
+        AuditLog::record('site.command.'.$type, $by?->id, $site->id, null,
             ['command_id' => $cmd->id, 'station' => $station, 'seconds' => $seconds], $ip);
 
         return $cmd;

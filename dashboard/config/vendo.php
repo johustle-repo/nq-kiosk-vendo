@@ -15,6 +15,13 @@ return [
     // Largest single "add time" from the dashboard (seconds).
     'max_admin_credit_seconds' => 4 * 3600,
 
+    // How long a dashboard "Charge now" keeps the coin box charger relay on at
+    // most (it stops earlier when the tablet reports a full battery).
+    'dashboard_charge_seconds' => 4 * 3600,
+
+    // First coin box firmware that takes "Charge now" from the dashboard.
+    'charge_firmware' => '2.5.0',
+
     // One-time token for the first-admin setup page (empty = page disabled).
     'setup_token' => env('SETUP_TOKEN'),
 ];

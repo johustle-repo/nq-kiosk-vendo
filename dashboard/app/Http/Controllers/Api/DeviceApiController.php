@@ -98,6 +98,7 @@ class DeviceApiController extends Controller
         $r = $this->ingest->phoneHeartbeat($device, $in, (string) $request->ip());
         if ($r['status'] === 200) {
             $r['body']['commands'] = $this->channel->tabletCommands($device, $in['acks'] ?? null);
+            $this->channel->stopChargeWhenFull($device);
         }
 
         return self::reply($r);

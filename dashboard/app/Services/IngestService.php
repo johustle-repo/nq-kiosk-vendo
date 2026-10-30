@@ -139,6 +139,8 @@ class IngestService
             'dropped_events' => self::intIn($status['dropped_events'] ?? null, 0, PHP_INT_MAX) ?? 0,
             'phone_last_poll_age_s' => self::intIn($status['phone_last_poll_age_s'] ?? null, -1, PHP_INT_MAX),
             'held_pulses' => self::intIn($status['held_pulses'] ?? null, 0, 100000) ?? 0,
+            // Charger relay (D6) right now; null when the firmware does not say.
+            'charge_relay' => is_bool($status['charge_relay'] ?? null) ? $status['charge_relay'] : null,
             'stations' => [],
         ];
         // Protocol 2: one entry per tablet.
@@ -153,6 +155,7 @@ class IngestService
                 'remaining_s' => self::intIn($s['remaining_s'] ?? null, 0, 30 * 86400) ?? 0,
                 'session_no' => self::intIn($s['session_no'] ?? null, 0, PHP_INT_MAX) ?? 0,
                 'paired' => ($s['paired'] ?? null) === true,
+                'dash_charge_s' => self::intIn($s['dash_charge_s'] ?? null, 0, 86400) ?? 0,
                 'phone_last_poll_age_s' => self::intIn($s['phone_last_poll_age_s'] ?? null, -1, PHP_INT_MAX),
             ];
         }

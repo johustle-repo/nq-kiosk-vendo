@@ -137,6 +137,22 @@ class SitePanel extends Component
         $this->flash = "Turning on the 10-tap admin on Tablet {$station} (within about 30 seconds). It turns off again when admin is locked on the tablet.";
     }
 
+    public function chargeNow(int $station): void
+    {
+        if (! $this->usable($station)) {
+            return;
+        }
+        $hours = intdiv((int) config('vendo.dashboard_charge_seconds'), 3600);
+        $this->run(fn (Site $s, ControllerChannel $c) => $c->chargeNow($s, $station, auth()->user(), request()->ip()),
+            "Charging Tablet {$station} for up to {$hours} h (it stops when the battery is full).");
+    }
+
+    public function stopCharge(int $station): void
+    {
+        $this->run(fn (Site $s, ControllerChannel $c) => $c->stopCharge($s, $station, auth()->user(), request()->ip()),
+            "Stopping Tablet {$station}'s charging…");
+    }
+
     public function assignHeld(int $station): void
     {
         $this->run(fn (Site $s, ControllerChannel $c) => $c->assignHeld($s, $station, auth()->user(), request()->ip()),
@@ -242,6 +258,10 @@ class SitePanel extends Component
                 'tapsPending' => $phone?->tapAdminPending() === true,
                 'tapsOn' => $phone?->status('tap_admin') === true,
                 'paired' => (bool) ($st['paired'] ?? false),
+                'chargeBox' => $box !== null,
+                'chargeSupported' => $box !== null && ControllerChannel::takesCharge($box),
+                'relay' => $box?->status('charge_relay'),
+                'dashCharge' => $box ? ControllerChannel::dashChargeSeconds($box, $n) : 0,
                 'usable' => $phone !== null || (bool) ($st['paired'] ?? false),
                 'remaining' => $remaining,
                 'freeTime' => $free,

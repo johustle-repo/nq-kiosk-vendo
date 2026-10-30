@@ -127,6 +127,10 @@
                     <dd class="text-right font-semibold">{{ $t['paired'] ? ($t['link'] ?? 'paired') : 'not paired' }}</dd>
                     <dt class="text-zinc-500">Battery</dt>
                     <dd @class(['text-right font-semibold', 'text-red-600' => $t['battery'] !== null && $t['battery'] <= 20 && ! $t['charging']])>{{ $t['battery'] === null ? '—' : $t['battery'].'%'.($t['charging'] ? ' · charging' : ($t['battery'] <= 20 ? ' · low' : '')) }}</dd>
+                    @if ($t['chargeBox'])
+                        <dt class="text-zinc-500">Charger</dt>
+                        <dd @class(['text-right font-semibold', 'text-brand-deep' => $t['relay'] === true])>{{ $t['dashCharge'] > 0 ? 'ON · '.$hms($t['dashCharge']).' left' : ($t['relay'] === true ? 'ON' : ($t['relay'] === false ? 'OFF' : '—')) }}</dd>
+                    @endif
                     <dt class="text-zinc-500">Today</dt>
                     <dd class="text-right font-bold text-coin">₱{{ number_format($t['pesosToday']) }}</dd>
                 </dl>
@@ -185,6 +189,16 @@
                             wire:model="customMinutes.{{ $t['n'] }}" class="field min-w-0 flex-1 py-1.5" @disabled(! $t['usable'])>
                         <button type="submit" class="btn-outline px-3 py-1.5" @disabled(! $t['usable'])>Add</button>
                     </form>
+                    @if ($t['chargeBox'])
+                        @if ($t['dashCharge'] > 0 || in_array('charge_on', $t['pending'], true))
+                            <button wire:click="stopCharge({{ $t['n'] }})" class="btn-outline w-full py-1.5" @disabled(in_array('charge_off', $t['pending'], true))>{{ in_array('charge_off', $t['pending'], true) ? 'Stopping charging…' : 'Stop charging' }}</button>
+                        @else
+                            <button wire:click="chargeNow({{ $t['n'] }})" wire:confirm="Switch on the charger relay for Tablet {{ $t['n'] }}? It stops when the battery is full or after {{ intdiv((int) config('vendo.dashboard_charge_seconds'), 3600) }} hours." class="btn-outline w-full py-1.5" @disabled(! $t['usable'] || ! $t['chargeSupported']) @if (! $t['chargeSupported']) title="Needs coin box firmware {{ config('vendo.charge_firmware') }}" @endif>Charge now</button>
+                            @unless ($t['chargeSupported'])
+                                <p class="text-center text-xs text-zinc-500">Charge now needs coin box firmware {{ config('vendo.charge_firmware') }}</p>
+                            @endunless
+                        @endif
+                    @endif
                     <button wire:click="endSession({{ $t['n'] }})" wire:confirm="End Tablet {{ $t['n'] }}'s session now? The customer loses the remaining time." class="btn-danger w-full py-1.5" @disabled(! $t['remaining'])>End session</button>
                     @if ($t['phone'])
                         <button wire:click="openAdmin({{ $t['n'] }})" wire:confirm="Open the admin screen on Tablet {{ $t['n'] }} without its PIN? Anyone at the tablet gets admin for 5 minutes." class="btn-outline w-full py-1.5" @disabled($t['adminPending'])>{{ $t['adminPending'] ? 'Opening admin…' : 'Open admin' }}</button>

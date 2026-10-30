@@ -12,7 +12,7 @@ class ControllerCommand extends Model
 {
     public const UPDATED_AT = null;
 
-    public const TYPES = ['add_time', 'end_session', 'assign_held'];
+    public const TYPES = ['add_time', 'end_session', 'assign_held', 'charge_on', 'charge_off'];
 
     protected function casts(): array
     {
