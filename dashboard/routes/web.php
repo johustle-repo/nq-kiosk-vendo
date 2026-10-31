@@ -3,6 +3,7 @@
 use App\Http\Controllers\AccountController;
 use App\Http\Controllers\AuditController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\EarningsController;
 use App\Http\Controllers\SetupController;
 use App\Http\Controllers\SiteController;
 use Illuminate\Support\Facades\Route;
@@ -21,7 +22,8 @@ Route::middleware('auth')->group(function () {
     Route::get('sites', [SiteController::class, 'index'])->name('sites.index');
     Route::post('sites', [SiteController::class, 'store'])->name('sites.store');
     Route::get('sites/{site}', [SiteController::class, 'show'])->name('sites.show');
-    Route::post('sites/{site}/config', [SiteController::class, 'saveConfig'])->name('sites.config');
+    Route::get('sites/{site}/earnings', [EarningsController::class, 'show'])->name('sites.earnings');
+    Route::post('sites/{site}/config',[SiteController::class, 'saveConfig'])->name('sites.config');
     Route::post('sites/{site}/enroll', [SiteController::class, 'enrollCode'])->name('sites.enroll');
     Route::post('devices/{device}/revoke', [SiteController::class, 'revokeDevice'])->name('devices.revoke');
 

@@ -344,6 +344,8 @@ class IngestService
         $body = [
             'ok' => true,
             'server_time' => time(),
+            // The tablet shows this number (its own coin box knows it as station 1).
+            'station' => $device->station_no === null ? null : (int) $device->station_no,
             'config' => [
                 'version' => (int) $cfg->version,
                 'allowed_packages' => $cfg->allowed_packages,

@@ -21,7 +21,7 @@ class SiteController extends Controller
     {
         $sites = $request->user()->sites()->orderBy('name')->get();
         $today = CoinEvent::whereIn('site_id', $sites->pluck('id'))->whereIn('event_type', CoinEvent::MONEY_TYPES)
-            ->where('occurred_at', '>=', now()->startOfDay())->selectRaw('site_id, SUM(pulses) as pesos')
+            ->where('occurred_at', '>=', now(config('app.display_timezone', 'Asia/Manila'))->startOfDay()->utc())->selectRaw('site_id, SUM(pulses) as pesos')
             ->groupBy('site_id')->pluck('pesos', 'site_id');
 
         return view('sites.index', ['sites' => $sites, 'today' => $today]);

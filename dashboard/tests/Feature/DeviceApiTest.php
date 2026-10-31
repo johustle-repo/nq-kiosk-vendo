@@ -172,6 +172,17 @@ it('records the heartbeat and lets an unnumbered tablet adopt its paired number'
         ->and($phone->status('charging'))->toBeTrue();
 });
 
+it('tells the tablet its dashboard number on each heartbeat', function () {
+    $site = site();
+    enrollDevice($site, 'controller', 2);
+    [, $t] = enrollDevice($site, 'phone', 2);
+    // Its own coin box knows it as station 1; the tablet still shows 2.
+    deviceCall($t, 'phone/heartbeat', ['boot_id' => 'cafe0003', 'uptime_ms' => 5, 'controller' => ['paired' => true, 'station' => 1]])
+        ->assertOk()->assertJsonPath('station', 2);
+    [, $t] = enrollDevice($site, 'phone');
+    deviceCall($t, 'phone/heartbeat', ['boot_id' => 'cafe0004', 'uptime_ms' => 5])->assertOk()->assertJsonPath('station', null);
+});
+
 it('ignores an out-of-range battery level', function () {
     [$phone, $t] = enrollDevice(site(), 'phone');
     deviceCall($t, 'phone/heartbeat', ['boot_id' => 'cafe0002', 'uptime_ms' => 5, 'battery' => ['pct' => -1, 'charging' => 'yes']])->assertOk();

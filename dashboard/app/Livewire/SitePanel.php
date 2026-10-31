@@ -202,7 +202,7 @@ class SitePanel extends Component
         $age = fn (?Device $d) => $d?->status_reported_at ? (int) $d->status_reported_at->diffInSeconds(now()) : null;
         $ctlAge = $age($controller);
 
-        $todayStart = now()->startOfDay();
+        $todayStart = now(config('app.display_timezone', 'Asia/Manila'))->startOfDay()->utc(); // shop midnight
         $perStation = CoinEvent::where('site_id', $site->id)->whereIn('event_type', ['credit', 'assign'])
             ->where('occurred_at', '>=', $todayStart)->selectRaw('station_no, SUM(pulses) as pesos')
             ->groupBy('station_no')->pluck('pesos', 'station_no');

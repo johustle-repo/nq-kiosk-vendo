@@ -33,6 +33,7 @@
             <div class="text-right">
                 <p class="muted">Today</p>
                 <p class="text-2xl font-black text-coin">₱{{ number_format($todayTotal) }}</p>
+                <a href="{{ route('sites.earnings', $site) }}" class="text-sm font-semibold text-brand hover:underline">Earnings per tablet →</a>
             </div>
         </div>
 

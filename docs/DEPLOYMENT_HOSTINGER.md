@@ -43,6 +43,11 @@ then copy `vendo_dashboard/` over `~/vendo_dashboard/` (keep `.env` and
 `storage/`) and `public_html/` into the web root (keep `api/`); run
 `php artisan migrate --force`, `config:cache`, `route:cache`, `view:cache`.
 
+The autoloader is classmap-authoritative: when an update adds a new PHP class
+(e.g. a controller), run `/opt/alt/php84/usr/bin/php /usr/local/bin/composer
+dump-autoload --no-dev --classmap-authoritative` in `~/vendo_dashboard/` before
+`route:cache`, or the class "does not exist".
+
 ## Folder layout on the server
 
 ```
