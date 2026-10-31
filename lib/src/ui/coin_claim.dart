@@ -15,7 +15,7 @@ Future<void> claimCoinBox(
   final s = controller.state;
   if (s.isDemo || !s.controllerPaired) return;
   final messenger = ScaffoldMessenger.of(context)..hideCurrentSnackBar();
-  final station = s.controllerStation;
+  final station = s.tabletNumber;
   void say(String text) => messenger
     ..hideCurrentSnackBar()
     ..showSnackBar(

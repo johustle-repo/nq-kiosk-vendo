@@ -136,6 +136,21 @@ void main() {
     expect(find.textContaining('TABLET 3'), findsOneWidget);
   });
 
+  testWidgets('with its own coin box it shows the dashboard number', (tester) async {
+    await pumpApp(
+      tester,
+      snapshot(
+        mode: 'production',
+        deviceOwner: true,
+        granted: true,
+        remainingMs: 600000,
+        cloudEnrolled: true,
+        cloudStation: 2,
+      ),
+    );
+    expect(find.textContaining('TABLET 2'), findsOneWidget);
+  });
+
   testWidgets('Add time during a session claims the coin box for this tablet', (tester) async {
     final bridge = await pumpApp(
       tester,

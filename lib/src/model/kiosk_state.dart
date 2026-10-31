@@ -41,6 +41,7 @@ class KioskState {
     this.cloudLastOkAgoMs,
     this.cloudLastError,
     this.cloudConfigVersion = 0,
+    this.cloudStation = 0,
     this.allowedPackages = const [],
     this.lossTimeoutS = 30,
     this.lockAdb = false,
@@ -101,6 +102,13 @@ class KioskState {
 
   /// Coins inserted with no tablet selected, waiting for the attendant.
   final int heldPulses;
+
+  /// This tablet's number on the dashboard (0 = none or not enrolled).
+  final int cloudStation;
+
+  /// Number shown to customers: the dashboard's, else the shared coin box's
+  /// (a tablet's own coin box knows it as station 1 whatever its number).
+  int get tabletNumber => cloudStation > 0 ? cloudStation : controllerStation;
 
   /// The attendant selected this tablet: coins inserted now go here.
   bool get coinBoxReadyForMe =>
@@ -276,6 +284,7 @@ class KioskState {
       cloudLastOkAgoMs: _int(cloud['lastOkAgoMs']),
       cloudLastError: cloud['lastError'] as String?,
       cloudConfigVersion: _int(cloud['configVersion']) ?? 0,
+      cloudStation: _int(cloud['station']) ?? 0,
       allowedPackages: ((settings['allowedPackages'] as List?) ?? const [])
           .cast<String>(),
       lossTimeoutS: _int(settings['lossTimeoutS']) ?? 30,

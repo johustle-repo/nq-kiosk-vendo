@@ -60,13 +60,24 @@ class _KioskShellState extends State<KioskShell> {
   /// Hidden 10-tap entry (the PIN is still required). On a tablet enrolled in
   /// the dashboard it is off unless the dashboard's "Enable 10 taps" turned it
   /// on; locking admin turns it off again. A tablet not enrolled yet keeps it,
-  /// or nobody could set it up.
+  /// or nobody could set it up. Off Wi-Fi it is on too: the dashboard cannot
+  /// reach the tablet then, so this is the only way to fix its Wi-Fi.
   Future<void> openAdmin(BuildContext context) async {
     final s = controller.state;
-    if (s.cloudEnrolled && !s.tapAdmin) return;
+    if (s.cloudEnrolled && !s.tapAdmin && await _wifiConnected()) return;
+    if (!context.mounted) return;
     final ok = await showPinDialog(context, controller.bridge);
     if (!ok || !context.mounted) return;
     await _pushAdmin(context);
+  }
+
+  /// Unknown counts as off Wi-Fi (the PIN still guards admin).
+  Future<bool> _wifiConnected() async {
+    try {
+      return (await controller.bridge.wifiStatus()).connected;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> _pushAdmin(BuildContext context) async {

@@ -129,9 +129,25 @@ void main() {
     });
 
     testWidgets('off on a tablet enrolled in the dashboard', (tester) async {
-      await pump(tester, const Size(360, 800), snapshot(cloudEnrolled: true));
+      final bridge = await pump(
+        tester,
+        const Size(360, 800),
+        snapshot(cloudEnrolled: true),
+      );
+      bridge.wifi = const WifiStatus(enabled: true, connected: true);
       await tapTimer(tester, 10);
       expect(find.text('Administrator PIN'), findsNothing);
+    });
+
+    testWidgets('on for an enrolled tablet that is off Wi-Fi', (tester) async {
+      final bridge = await pump(
+        tester,
+        const Size(360, 800),
+        snapshot(cloudEnrolled: true),
+      );
+      bridge.wifi = const WifiStatus(enabled: true);
+      await tapTimer(tester, 10);
+      expect(find.text('Administrator PIN'), findsOneWidget);
     });
 
     testWidgets('on for an enrolled tablet when the dashboard enabled it', (

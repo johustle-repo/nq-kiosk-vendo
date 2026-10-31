@@ -43,15 +43,8 @@ class AccessPolicyTest {
     }
 
     @Test
-    fun `lost coin box keeps the paid session counting down`() {
-        val d = AccessPolicy.decide(inputs(link = LinkState.LOST, ctl = 3_600_000)) as AccessDecision.Granted
-        assertEquals(3_600_000, d.remainingMs)
-        assertEquals("controller", d.source)
-    }
-
-    @Test
-    fun `lost coin box with no time left or never heard from denies`() {
-        assertEquals(DenyReason.CONTROLLER_LOST, reason(AccessPolicy.decide(inputs(link = LinkState.LOST, ctl = 0))))
+    fun `local controller loss denies access even with time remaining`() {
+        assertEquals(DenyReason.CONTROLLER_LOST, reason(AccessPolicy.decide(inputs(link = LinkState.LOST, ctl = 3_600_000))))
         assertEquals(DenyReason.CONTROLLER_LOST, reason(AccessPolicy.decide(inputs(link = LinkState.NEVER))))
     }
 
@@ -79,8 +72,8 @@ class AccessPolicyTest {
     }
 
     @Test
-    fun `demo ignores controller time from a coin box never heard from`() {
-        val d = AccessPolicy.decide(inputs(mode = KioskMode.DEMO, link = LinkState.NEVER, ctl = 60_000, demo = 0))
+    fun `demo ignores controller time when link is lost`() {
+        val d = AccessPolicy.decide(inputs(mode = KioskMode.DEMO, link = LinkState.LOST, ctl = 60_000, demo = 0))
         assertFalse(d.granted)
     }
 
@@ -104,9 +97,9 @@ class AccessPolicyTest {
     }
 
     @Test
-    fun `lost coin box keeps both coin and dashboard time`() {
+    fun `lost coin box keeps dashboard time only`() {
         val d = AccessPolicy.decide(inputs(link = LinkState.LOST, ctl = 600_000, dash = 120_000)) as AccessDecision.Granted
-        assertEquals(720_000, d.remainingMs)
+        assertEquals(120_000, d.remainingMs)
     }
 }
 

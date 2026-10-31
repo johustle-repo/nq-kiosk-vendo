@@ -262,6 +262,7 @@ Map<Object?, Object?> snapshot({
   int? lastOkAgoMs = 500,
   String cloudLink = 'ok',
   bool cloudEnrolled = false,
+  int cloudStation = 0,
   int? expiredAgoMs,
   String? expiredReason,
   List<String> allowed = const ['com.example.video'],
@@ -311,7 +312,12 @@ Map<Object?, Object?> snapshot({
     'selectedTtlS': selectedStation == 0 ? 0 : 60,
     'heldPulses': heldPulses,
   },
-  'cloud': {'enrolled': cloudEnrolled, 'link': cloudLink, 'configVersion': 1},
+  'cloud': {
+    'enrolled': cloudEnrolled,
+    'link': cloudLink,
+    'configVersion': 1,
+    'station': cloudStation,
+  },
   'settings': {
     'allowedPackages': allowed,
     'lossTimeoutS': 30,

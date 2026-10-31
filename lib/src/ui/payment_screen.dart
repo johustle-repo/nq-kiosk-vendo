@@ -104,7 +104,7 @@ class PaymentScreen extends StatelessWidget {
               !shared
                   ? 'Drop a coin in the slot. Your time starts right away.'
                   : ready
-                  ? 'The coin box is ready for Tablet ${s.controllerStation}. Insert your coins now.'
+                  ? 'The coin box is ready for Tablet ${s.tabletNumber}. Insert your coins now.'
                   : 'Tap "Insert coin to start", then insert your coins.',
               key: const Key('payment-hint'),
               textAlign: TextAlign.center,

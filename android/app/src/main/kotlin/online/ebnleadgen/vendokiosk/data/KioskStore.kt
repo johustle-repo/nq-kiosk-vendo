@@ -93,6 +93,11 @@ class KioskStore(context: Context) {
         get() = prefs.getString("cloud_device_id", null)
         set(v) = prefs.edit().putString("cloud_device_id", v).apply()
 
+    /** This tablet's number on the dashboard (0 = none or not enrolled). */
+    var cloudStation: Int
+        get() = prefs.getInt("cloud_station", 0)
+        set(v) = prefs.edit().putInt("cloud_station", v).apply()
+
     /** Random per-install id sent to the controller when pairing (not a secret). */
     val phoneId: String
         get() = prefs.getString("phone_id", null) ?: java.util.UUID.randomUUID().toString().also {

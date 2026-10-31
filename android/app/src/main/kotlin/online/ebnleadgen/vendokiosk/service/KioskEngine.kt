@@ -71,8 +71,8 @@ class KioskEngine private constructor(context: Context) {
         private const val ADMIN_UNLOCK_MS = 5 * 60_000L
         private const val RELOCK_INTERVAL_MS = 3_000L
         // Coin box unreachable this long → look for it on the local network (its IP may have changed).
-        private const val DISCOVER_AFTER_MS = 10_000L
-        private const val DISCOVER_INTERVAL_MS = 20_000L
+        private const val DISCOVER_AFTER_MS = 15_000L
+        private const val DISCOVER_INTERVAL_MS = 60_000L
         // Google Play for the administrator (install apps), then it is locked out again.
         private const val APP_STORE_WINDOW_MS = 15 * 60_000L
         private const val PLAY_STORE = "com.android.vending"
@@ -465,6 +465,15 @@ class KioskEngine private constructor(context: Context) {
                 cloudLastOkAtMs = now()
                 cloudLastError = null
                 res.optJSONObject("config")?.let { cfg -> handler.post { applyCloudConfig(cfg) } }
+                if (res.has("station")) {
+                    val station = res.optInt("station", 0).takeIf { it in 1..4 } ?: 0
+                    handler.post {
+                        if (store.cloudStation != station) {
+                            store.cloudStation = station
+                            emit()
+                        }
+                    }
+                }
                 // One-shot request from a signed-in dashboard administrator (audited there).
                 if (res.optJSONObject("admin_unlock") != null) handler.post { remoteAdminUnlock() }
                 if (res.optBoolean("tap_admin", false)) handler.post { enableTapAdmin() }
@@ -827,6 +836,7 @@ class KioskEngine private constructor(context: Context) {
                 "lastError" to cloudLastError,
                 "configVersion" to store.cloudConfigVersion,
                 "deviceId" to store.cloudDeviceId,
+                "station" to store.cloudStation,
             ),
             "settings" to mapOf(
                 "allowedPackages" to store.allowedPackages,
@@ -1278,6 +1288,7 @@ class KioskEngine private constructor(context: Context) {
         val (deviceId, token) = cloud.enrollPhone(code.trim(), "Kiosk phone ${Build.MODEL}", store.phoneId.take(32))
         store.cloudToken = token
         store.cloudDeviceId = deviceId
+        store.cloudStation = 0 // the first heartbeat brings the number
         store.cloudConfigVersion = 0 // take the dashboard configuration on first heartbeat
         cloudLink = "ok"
         lastCloudAtMs = -CLOUD_INTERVAL_MS
@@ -1290,6 +1301,7 @@ class KioskEngine private constructor(context: Context) {
     fun unenrollCloud() {
         store.cloudToken = null
         store.cloudDeviceId = null
+        store.cloudStation = 0
         cloudLink = "disabled"
         handler.post { emit() }
     }

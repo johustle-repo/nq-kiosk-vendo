@@ -84,7 +84,7 @@ class _LauncherScreenState extends State<LauncherScreen> {
     final level = timeLevel(s.remainingMs);
     final low = level == TimeLevel.low || level == TimeLevel.critical;
     final label = s.controllerPaired && !s.isDemo
-        ? 'Tablet ${s.controllerStation} · Time left'
+        ? 'Tablet ${s.tabletNumber} · Time left'
         : 'Time left';
 
     // Low time is shown inside the timer itself (colour + one short line).
