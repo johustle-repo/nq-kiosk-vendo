@@ -93,9 +93,6 @@ String bootId;    // random per boot: lets the tablets and cloud detect restarts
 String adminFormToken;           // random per boot, required by every settings form (CSRF)
 bool staPaused = false;          // shop Wi-Fi retries paused while the hotspot is in use
 uint64_t staDownSinceMs = 0;
-uint64_t staRejoinAtMs = 0;      // last fresh join attempt while the shop Wi-Fi is down
-uint64_t netQuietUntilMs = 0;    // internet down: cloud calls skipped until then
-uint8_t netFailures = 0;
 uint64_t hotspotRestartAtMs = 0; // apply a new hotspot password after the reply is sent
 uint64_t hotspotInfoUntilMs = 0; // FLASH held 10 s: hotspot name and password on the LCD
 
@@ -748,7 +745,7 @@ void noteTlsResult(int code) {
     tlsFailures = 0;
     return;
   }
-  if (!tlsSmallBuffers || !WiFi.isConnected() || code == -101 || code == -102) return;
+  if (!tlsSmallBuffers || !WiFi.isConnected() || code == -101) return;
   if (++tlsFailures >= 4) {
     tlsSmallBuffers = false;
     netClient.setBufferSizes(16384, TLS_TX_BUFFER);
@@ -756,26 +753,7 @@ void noteTlsResult(int code) {
   }
 }
 
-// Internet unreachable: pause every cloud call (doubling, capped) so the local tablet API stays responsive.
-void noteNetResult(int code) {
-  if (code > 0) {
-    if (netFailures) Serial.println("[net] internet back");
-    netFailures = 0;
-    netQuietUntilMs = 0;
-    return;
-  }
-  if (code == -101 || code == -102) return;
-  const uint64_t pause = min<uint64_t>(NET_QUIET_MAX_MS, (uint64_t)NET_QUIET_BASE_MS << min<uint8_t>(netFailures, 3));
-  if (netFailures < 255) netFailures++;
-  netQuietUntilMs = millis64() + pause;
-  Serial.printf("[net] cloud unreachable, cloud calls paused %lu s (tablet unaffected)\n", (unsigned long)(pause / 1000));
-}
-
 int httpsPost(const String &url, const String &body, const String &bearer, String &response) {
-  if (millis64() < netQuietUntilMs) {
-    response = String();
-    return -102;  // internet down: skipped without blocking
-  }
   // A dead connection (e.g. after a Wi-Fi change) still holds its TLS buffers: release them first.
   if (!netClient.connected()) netClient.stop();
   if (ESP.getMaxFreeBlockSize() < TLS_MIN_FREE_BLOCK && !netClient.connected()) {
@@ -791,7 +769,6 @@ int httpsPost(const String &url, const String &body, const String &bearer, Strin
   response = code > 0 ? netHttp.getString() : String();  // read fully so the connection can be reused
   netHttp.end();  // keeps the socket open when the server allows keep-alive
   noteTlsResult(code);
-  noteNetResult(code);
   if (code < 0) {
     char err[80];
     netClient.getLastSSLError(err, sizeof(err));
@@ -943,8 +920,6 @@ void cloudSync() {
     cloudState = CLOUD_OK;
     cloudFailures = 0;
     lastCloudOkMs = millis64();
-  } else if (code == -102) {
-    cloudState = CLOUD_ERROR;  // internet pause: no extra back-off, retried at the normal interval
   } else if (code == 401) {
     cloudState = CLOUD_UNAUTHORIZED;  // revoked: keep events, stop until re-enrolled
     Serial.println("[cloud] credential rejected (revoked?) — re-enroll via setup portal");
@@ -1054,7 +1029,6 @@ void controllerPoll() {
   b += "]}";
   String resp;
   const int code = httpsPost(settings.apiBase + "/controller/poll", b, settings.cloudToken, resp);
-  if (code == -102) return;  // internet pause: retried as soon as it ends
   if (code != 200) {
     pollState = code == 401 ? CLOUD_UNAUTHORIZED : CLOUD_ERROR;
     pollFailures++;
@@ -1670,12 +1644,6 @@ void wifiLoop() {
     Serial.printf("[wifi] %s unreachable; retries paused while someone uses the hotspot\n", settings.wifiSsid.c_str());
     WiFi.disconnect();
     staPaused = true;
-  } else if (!adminOnHotspot && now - staDownSinceMs >= STA_REJOIN_MS && now - staRejoinAtMs >= STA_REJOIN_MS) {
-    Serial.printf("[wifi] %s down %lu s: joining again\n", settings.wifiSsid.c_str(), (unsigned long)((now - staDownSinceMs) / 1000));
-    const uint64_t downSince = staDownSinceMs;
-    connectShopWifi();
-    staDownSinceMs = downSince;  // keep the outage start for the hotspot pause
-    staRejoinAtMs = now;
   }
 }
 
@@ -1809,7 +1777,6 @@ void logWifiChanges() {
   if (now == was) return;
   was = now;
   if (now) {
-    netQuietUntilMs = 0;  // try the cloud right away on the new connection
     Serial.printf("[wifi] connected to %s, IP %s (use this IP to pair the tablets)\n", WiFi.SSID().c_str(),
                   WiFi.localIP().toString().c_str());
   } else {

@@ -3,7 +3,7 @@
 // are NOT here; they are set through the setup portal or the cloud dashboard.
 #pragma once
 
-#define FW_VERSION "2.5.2"
+#define FW_VERSION "2.5.1"
 // Local phone protocol 2: one coin box, up to MAX_STATIONS tablets, per-tablet keys.
 #define PROTOCOL_VERSION 2
 
@@ -86,11 +86,6 @@
 #define CLOUD_BACKOFF_MAX_S 300UL
 // Short, because the tablets' local requests wait while a cloud call runs.
 #define HTTP_TIMEOUT_MS 5000
-// Internet down (Wi-Fi up): after a failed cloud call every cloud call is
-// skipped for a while, so the coin box keeps answering its tablet instead of
-// waiting on timeouts. The pause doubles per failure: 5, 10, 20, 30 s.
-#define NET_QUIET_BASE_MS 5000UL
-#define NET_QUIET_MAX_MS 30000UL
 // TLS receive buffer, with the max fragment length extension (saves
 // ~12 KB of heap per connection; a full 16 KB buffer ran the heap out).
 #define TLS_RX_BUFFER 4096
@@ -139,9 +134,6 @@
 // long, stop retrying it: the ESP8266's reconnect scans hop channels and make
 // the hotspot drop. Retrying resumes when the hotspot is empty or on save.
 #define STA_PAUSE_AFTER_MS 30000UL
-// Shop Wi-Fi still down this long: start a fresh join instead of waiting on the
-// SDK's auto-reconnect (which can stall after a router restart). Repeats.
-#define STA_REJOIN_MS 10000UL
 #define HOTSPOT_INFO_SHOW_MS 60000UL
 
 // ---------------------------------------------------------------- LCD
